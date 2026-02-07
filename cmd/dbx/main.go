@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -25,17 +27,21 @@ type app struct {
 }
 
 func main() {
-	if err := newRootCmd().Execute(); err != nil {
+	a := &app{
+		manager: session.NewManager(),
+	}
+
+	rootCmd := newRootCmd(a)
+	stopSignalCleanup := a.installSignalCleanup(rootCmd.ErrOrStderr())
+	defer stopSignalCleanup()
+
+	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func newRootCmd() *cobra.Command {
-	a := &app{
-		manager: session.NewManager(),
-	}
-
+func newRootCmd(a *app) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:           "dbx",
 		Short:         "Manage AWS SSM port-forwarding sessions",
@@ -53,6 +59,36 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(a.newStopCmd())
 
 	return rootCmd
+}
+
+func (a *app) installSignalCleanup(errOut io.Writer) func() {
+	sigCh := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	var once sync.Once
+
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		select {
+		case <-done:
+			return
+		case <-sigCh:
+		}
+
+		once.Do(func() {
+			if !a.noCleanup {
+				if err := a.manager.StopAll(); err != nil {
+					fmt.Fprintf(errOut, "cleanup failed: %v\n", err)
+				}
+			}
+			os.Exit(130)
+		})
+	}()
+
+	return func() {
+		close(done)
+		signal.Stop(sigCh)
+	}
 }
 
 func (a *app) newConnectCmd() *cobra.Command {
