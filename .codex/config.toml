@@ -1,17 +1,6 @@
-# dbx / db project — Codex CLI project config
-# Repo: github.com/fredyranthun/db
-
-# Help Codex reliably locate the project root even if invoked from subfolders.
 project_root_markers = [".git", "go.mod", "AGENTS.md"]
 
-[run]
-format_cmd = "make fmt"
-test_cmd = "make test"
-lint_cmd = "make check"
-
-# Optional: keep empty until you add it.
-lint_cmd = ""
-
-[files]
-# Optional: reduce noise (uncomment once relevant)
-# ignore = ["**/bin/**", "**/dist/**", "**/.next/**"]
+[commands]
+fmt = "make fmt"
+test = "make test"
+check = "make check"
