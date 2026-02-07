@@ -64,6 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/fredyranthun/dbx/main/scripts/insta
 ```
 
 The binary is installed to `~/.local/bin/dbx` by default.
+The installer resolves the correct archive name from release `checksums.txt`, so `v`-prefixed tags are handled automatically.
 
 ### Release a new version
 

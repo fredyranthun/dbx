@@ -31,31 +31,34 @@ if [[ -z "${tag:-}" ]]; then
   exit 1
 fi
 
-asset="${BIN}_${tag}_${OS}_${ARCH}.tar.gz"
 base_url="https://github.com/${REPO}/releases/download/${tag}"
-asset_url="${base_url}/${asset}"
 checksums_url="${base_url}/checksums.txt"
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-echo "Downloading $asset_url"
-curl -fsSL "$asset_url" -o "$tmpdir/$asset"
+echo "Downloading ${checksums_url}"
 curl -fsSL "$checksums_url" -o "$tmpdir/checksums.txt"
 
-if command -v sha256sum >/dev/null 2>&1; then
-  expected="$(grep " ${asset}\$" "$tmpdir/checksums.txt" | awk '{print $1}' | head -n1)"
-  actual="$(sha256sum "$tmpdir/$asset" | awk '{print $1}')"
-elif command -v shasum >/dev/null 2>&1; then
-  expected="$(grep " ${asset}\$" "$tmpdir/checksums.txt" | awk '{print $1}' | head -n1)"
-  actual="$(shasum -a 256 "$tmpdir/$asset" | awk '{print $1}')"
-else
-  echo "Neither sha256sum nor shasum is available for checksum verification." >&2
+asset_line="$(grep -E "[[:space:]]${BIN}_.+_${OS}_${ARCH}\\.tar\\.gz$" "$tmpdir/checksums.txt" | head -n1 || true)"
+if [[ -z "${asset_line:-}" ]]; then
+  echo "No matching release asset found in checksums for repo=${REPO} tag=${tag} os=${OS} arch=${ARCH}." >&2
   exit 1
 fi
 
-if [[ -z "${expected:-}" ]]; then
-  echo "Could not find checksum entry for ${asset}." >&2
+expected="$(printf '%s\n' "$asset_line" | awk '{print $1}')"
+asset="$(printf '%s\n' "$asset_line" | awk '{print $2}')"
+asset_url="${base_url}/${asset}"
+
+echo "Downloading ${asset_url}"
+curl -fsSL "$asset_url" -o "$tmpdir/$asset"
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$tmpdir/$asset" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$tmpdir/$asset" | awk '{print $1}')"
+else
+  echo "Neither sha256sum nor shasum is available for checksum verification." >&2
   exit 1
 fi
 
