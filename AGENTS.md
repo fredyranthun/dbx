@@ -1,8 +1,17 @@
 # AGENTS.md — dbx (Code Assistant Execution Guide)
 
-This document is the **implementation playbook** for a code assistant to build `dbx` from scratch with minimal ambiguity. Follow the steps in order. Keep changes small, compile often, and add tests where it’s cheap.
+This document is the implementation playbook for a code assistant to build `dbx` from scratch with minimal ambiguity. Follow the steps in order. Keep changes small, compile often, and add tests where it’s cheap.
 
-> Project goal: a Go CLI that manages multiple AWS SSM port-forwarding sessions (jumpbox ➜ remote host) using a YAML/JSON config.
+Project goal: a Go CLI that manages multiple AWS SSM port-forwarding sessions (jumpbox ➜ remote host) using a YAML/JSON config.
+
+---
+
+## Working Agreement (must follow)
+
+- Always run `make check` before finishing a task.
+- Prefer small commits and incremental changes; keep the repo building at each step.
+- Do not invoke `aws` via a shell string. Always exec `aws` directly with an args slice.
+- Do not implement the TUI until MVP CLI is working.
 
 ---
 
@@ -11,23 +20,21 @@ This document is the **implementation playbook** for a code assistant to build `
 You are done when all are true:
 
 1. `dbx connect service1 dev` starts a port-forward session and prints `ENDPOINT=<bind>:<port>`.
-2. Multiple sessions can run concurrently (>=5).
+2. Multiple sessions run concurrently (>=5) without port collisions.
 3. `dbx ls` lists running sessions with correct ports and uptime.
 4. `dbx logs service1/dev --follow` tails logs from the session process.
 5. `dbx stop service1/dev` stops the session process.
 6. On Ctrl+C, dbx stops all sessions by default (unless `--no-cleanup`).
-7. “Always run gofmt -w . and go test ./... before finishing a task”
-8. “Prefer small commits; compile frequently”
 
 ---
 
 ## 1) Constraints and Principles
 
-- **Engine-agnostic**: no DB credentials, no DB client integration required.
-- **Port-forward only**: use `AWS-StartPortForwardingSessionToRemoteHost`.
-- **In-memory sessions**: persistence across restarts is not required.
-- Avoid parsing AWS output as a readiness signal. Use **local port readiness** (TCP check).
-- Default bind **must** be `127.0.0.1`.
+- Engine-agnostic: no DB credentials, no DB client integration required.
+- Port-forward only: use `AWS-StartPortForwardingSessionToRemoteHost`.
+- In-memory sessions: persistence across restarts is not required.
+- Avoid parsing AWS output as a readiness signal. Use local port readiness (TCP check).
+- Default bind must be `127.0.0.1`.
 
 ---
 
@@ -41,9 +48,7 @@ Suggested dependencies:
 - Config: `github.com/spf13/viper`
 - Validation: `github.com/go-playground/validator/v10`
 - Logging: `github.com/rs/zerolog` (or zap)
-- Table output: implement simple formatting or use `github.com/olekukonko/tablewriter` (optional)
-
-**Do not implement the TUI** until the MVP CLI works.
+- Table output: simple formatting or `github.com/olekukonko/tablewriter` (optional)
 
 ---
 
@@ -51,28 +56,36 @@ Suggested dependencies:
 
 ```
 
-dbx/
-cmd/
-dbx/
-main.go
-internal/
-config/
-config.go
-loader.go
-validate.go
-session/
-types.go
-manager.go
-aws_command.go
-ports.go
-readiness.go
-logs.go
-README.md
-PRD.md
-AGENTS.md
-go.mod
+.
+├── cmd/
+│ └── dbx/
+│ └── main.go
+├── internal/
+│ ├── config/
+│ │ ├── config.go
+│ │ ├── loader.go
+│ │ └── validate.go
+│ └── session/
+│ ├── aws_command.go
+│ ├── logs.go
+│ ├── manager.go
+│ ├── ports.go
+│ ├── readiness.go
+│ └── types.go
+├── .codex/
+│ └── config.toml
+├── AGENTS.md
+├── Makefile
+├── PRD.md
+├── README.md
+└── go.mod
 
 ```
+
+Notes:
+
+- `.codex/config.toml` must exist to provide Codex “golden path” commands.
+- `go.mod` should be created in Step 1.
 
 ---
 
@@ -131,18 +144,18 @@ Put validation in `internal/config/validate.go`.
 - `dbx ls`
 - `dbx logs <service>/<env> [--follow|-f] [--lines N]`
 - `dbx stop <service>/<env> | <service> <env> | --all`
-- Root flags:
-  - `--config PATH`
-  - `--verbose`
-  - `--no-cleanup` (optional but recommended)
+
+Root flags:
+
+- `--config PATH`
+- `--verbose`
+- `--no-cleanup` (optional but recommended)
 
 ### Output requirements
 
-- `connect` must print a final line:
-  - `ENDPOINT=<bind>:<port>`
-
+- `connect` must print a final line: `ENDPOINT=<bind>:<port>`
 - `ls` prints a readable table.
-- Errors should be actionable (include service/env path when relevant).
+- Errors must include the session key and be actionable.
 
 ---
 
@@ -150,38 +163,37 @@ Put validation in `internal/config/validate.go`.
 
 ### Step 1 — Initialize module & main entry
 
-**Files:**
+Files:
 
 - `go.mod`
 - `cmd/dbx/main.go`
 
-**Tasks:**
+Tasks:
 
-- `go mod init <module>`
+- `go mod init github.com/fredyranthun/db` (ALREADY DONE)
 - Create Cobra root command with persistent flags (`--config`, `--verbose`, optional `--no-cleanup`)
 - Add stub subcommands: connect, ls, logs, stop
-- Ensure `go build ./...` succeeds
+- Ensure `make check` succeeds (add targets if missing)
 
-**Acceptance:**
+Acceptance:
 
 - `dbx --help` shows commands.
+- `make check` passes.
 
 ---
 
 ### Step 2 — Implement config structs
 
-**Files:**
+Files:
 
 - `internal/config/config.go`
 
-**Tasks:**
+Tasks:
 
-- Define strongly typed structs:
-  - `Config`, `Defaults`, `Service`, `EnvConfig`
+- Define strongly typed structs: `Config`, `Defaults`, `Service`, `EnvConfig`
+- Add helpers for defaults merging if needed.
 
-- Provide `ApplyDefaults()` helper if needed.
-
-**Acceptance:**
+Acceptance:
 
 - Package compiles.
 
@@ -189,39 +201,35 @@ Put validation in `internal/config/validate.go`.
 
 ### Step 3 — Implement config loader
 
-**Files:**
+Files:
 
 - `internal/config/loader.go`
 
-**Tasks:**
+Tasks:
 
 - Implement `LoadConfig(pathOverride string) (*Config, string, error)`
-  - returns config + resolved path
+- Support YAML/JSON with Viper
+- Default path logic: search `~/.dbx/config.(yml|yaml|json)` (pick first existing)
+- Missing config file should return a clear error.
 
-- Support YAML/JSON with Viper.
-- Implement default path logic:
-  - If no override and no env, search `~/.dbx/config.(yml|yaml|json)` (pick first existing)
+Acceptance:
 
-- On missing config file: return clear error.
-
-**Acceptance:**
-
-- A simple `LoadConfig("")` loads `~/.dbx/config.yml` successfully.
+- `LoadConfig("")` loads `~/.dbx/config.yml` successfully (when present).
 
 ---
 
 ### Step 4 — Implement config validation
 
-**Files:**
+Files:
 
 - `internal/config/validate.go`
 
-**Tasks:**
+Tasks:
 
 - Implement `Validate(cfg *Config) error`
-- Ensure errors mention the failing path (e.g., `services[service1].envs[dev].remote_port`)
+- Errors must mention failing path (e.g., `services[service1].envs[dev].remote_port`)
 
-**Acceptance:**
+Acceptance:
 
 - Invalid config fails fast with clear error.
 
@@ -229,54 +237,49 @@ Put validation in `internal/config/validate.go`.
 
 ### Step 5 — Implement session types and logging buffer
 
-**Files:**
+Files:
 
 - `internal/session/types.go`
 - `internal/session/logs.go`
 
-**Tasks:**
+Tasks:
 
 - Define:
-  - `type SessionState string` constants: `starting`, `running`, `stopping`, `stopped`, `error`
-  - `type SessionKey string` (format `service/env`)
-  - `type Session struct` with fields:
+  - `SessionState`: `starting`, `running`, `stopping`, `stopped`, `error`
+  - `SessionKey`: `service/env`
+  - `Session` struct with:
     - Key, Service, Env
     - Bind, LocalPort
     - RemoteHost, RemotePort
     - TargetInstanceID, Region, Profile
     - PID
-    - State, StartTime
-    - LastError
-    - cmd \*exec.Cmd
-    - cancel context.CancelFunc
+    - State, StartTime, LastError
+    - cmd \*exec.Cmd, cancel context.CancelFunc
     - logBuf \*RingBuffer
-    - subscribers []chan string (or a pubsub)
+    - subscribers / pubsub for follow logs
 
-- Implement a simple `RingBuffer` of last N lines (default 500):
+- Implement `RingBuffer` (default 500 lines):
   - `Append(line string)`
   - `Last(n int) []string`
 
-**Acceptance:**
+Acceptance:
 
-- Unit test for ring buffer (optional but recommended).
+- Unit test for RingBuffer (optional but recommended).
 
 ---
 
 ### Step 6 — Implement port allocator
 
-**Files:**
+Files:
 
 - `internal/session/ports.go`
 
-**Tasks:**
+Tasks:
 
-- `FindFreePort(bind string, min int, max int) (int, error)`
-  - Scan range, attempt `net.Listen("tcp", bind:port)`
-  - Close immediately on success and return port
-
+- `FindFreePort(bind string, min int, max int) (int, error)` using `net.Listen`
 - `ValidatePortAvailable(bind string, port int) error`
 
-**Acceptance:**
+Acceptance:
 
 - Picks a free port within range.
 
@@ -284,135 +287,107 @@ Put validation in `internal/config/validate.go`.
 
 ### Step 7 — Implement AWS CLI command builder
 
-**Files:**
+Files:
 
 - `internal/session/aws_command.go`
 
-**Tasks:**
+Tasks:
 
-- `BuildSSMPortForwardArgs(targetInstanceID, remoteHost string, remotePort, localPort int, region, profile string) []string`
-- Must use document name:
-  - `AWS-StartPortForwardingSessionToRemoteHost`
-
-- Must set parameters in the exact expected format:
-  - `host=["..."],portNumber=["..."],localPortNumber=["..."]`
+- `BuildSSMPortForwardArgs(...) []string`
+- Must use:
+  - document: `AWS-StartPortForwardingSessionToRemoteHost`
+  - parameters format:
+    - `host=["..."],portNumber=["..."],localPortNumber=["..."]`
 
 - Include `--region` and `--profile` only if non-empty.
 
-**Acceptance:**
+Acceptance:
 
-- Printed args are valid for manual copy/paste.
+- Args are valid for manual copy/paste.
 
 ---
 
 ### Step 8 — Implement readiness check
 
-**Files:**
+Files:
 
 - `internal/session/readiness.go`
 
-**Tasks:**
+Tasks:
 
 - `WaitForPort(bind string, port int, timeout time.Duration) error`
-  - Poll `net.DialTimeout("tcp", bind:port, 200ms)` until success or timeout
+- Poll `net.DialTimeout` until success or timeout.
 
-- If timeout: return error with port and bind.
+Acceptance:
 
-**Acceptance:**
-
-- Works on a known listening port in a test.
+- Works in a test with a temp listener.
 
 ---
 
 ### Step 9 — Implement session manager (core)
 
-**Files:**
+Files:
 
 - `internal/session/manager.go`
 
-**Tasks:**
+Tasks:
 
-- Create `type Manager struct` with:
-  - `mu sync.Mutex`
-  - `sessions map[SessionKey]*Session`
-  - defaults like buffer size, timeouts
-
+- `Manager` with mutex + sessions map
 - Implement:
-  - `Start(key SessionKey, cfg *config.Config, overrides StartOverrides) (*Session, error)`
-  - `Stop(key SessionKey) error`
+  - `Start(...)`
+  - `Stop(key)`
   - `StopAll()`
   - `List() []SessionSummary`
-  - `Get(key SessionKey) (*Session, bool)`
+  - `Get(key)`
 
-- `Start` flow:
-  1. If already running: return it
-  2. Resolve service/env config entry from cfg
-  3. Determine effective bind/region/profile
-  4. Determine port: override or allocate
-  5. Build aws args
-  6. `exec.CommandContext(ctx, "aws", args...)`
-  7. Pipe stdout/stderr, scan line-by-line, append to ring buffer, broadcast to subscribers
-  8. Start process; store PID
-  9. WaitForPort (startup timeout)
-  10. If success => running. If failure => stop process and mark error
+- `Start` must:
+  - allocate port
+  - start `exec.CommandContext(ctx, "aws", args...)`
+  - capture stdout/stderr to ring buffer + subscribers
+  - readiness via `WaitForPort`
 
-- Stopping:
-  - send `os.Interrupt` then wait `stop_timeout_seconds`, then kill.
-  - Update state transitions.
+- `Stop` must:
+  - send interrupt then kill after timeout
+  - update state transitions
 
-**Acceptance:**
+Acceptance:
 
-- A session can start and the manager can stop it.
+- Start/stop works for one session.
 
 ---
 
-### Step 10 — Wire CLI commands to manager
+### Step 10 — Wire CLI commands
 
-**Files:**
+Files:
 
-- `cmd/dbx/main.go` (or split into cmd files if desired)
+- `cmd/dbx/main.go` (or split)
 
-**Tasks:**
+Tasks:
 
-- Instantiate config on startup.
-- Instantiate a global manager.
-- `connect`:
-  - parse args service env
-  - call manager.Start()
-  - print summary + `ENDPOINT=...`
+- `connect` prints summary + `ENDPOINT=...`
+- `ls` prints table
+- `logs` prints last N; follow streams until Ctrl+C
+- `stop` stops one or all
 
-- `ls`:
-  - call manager.List()
-  - print table (aligned columns)
+Acceptance:
 
-- `logs`:
-  - parse key
-  - print last N lines
-  - if follow: subscribe and stream until Ctrl+C
-
-- `stop`:
-  - stop key or --all
-
-**Acceptance:**
-
-- Full CLI flow works for at least one session.
+- Full CLI flow works.
 
 ---
 
 ### Step 11 — Cleanup on exit
 
-**Files:**
+Files:
 
 - `cmd/dbx/main.go`
 
-**Tasks:**
+Tasks:
 
-- Trap SIGINT/SIGTERM:
-  - If `--no-cleanup` is false, call `manager.StopAll()` and exit.
+- Trap SIGINT/SIGTERM
+- If `--no-cleanup` is false: `StopAll()` and exit
+- Ensure `logs --follow` Ctrl+C doesn’t break global cleanup
 
-- Ensure `logs --follow` uses its own Ctrl+C handling without breaking cleanup behavior.
-
-**Acceptance:**
+Acceptance:
 
 - Ctrl+C stops all sessions.
 
@@ -420,68 +395,21 @@ Put validation in `internal/config/validate.go`.
 
 ## 7) Testing Guidance (Lightweight)
 
-Minimum recommended tests:
+Recommended tests:
 
 - RingBuffer
-- Port allocator (at least `ValidatePortAvailable` style test)
-- Readiness check (spin up a temporary listener)
+- Port allocator
+- Readiness check
 
-Avoid tests that require real AWS access.
+Avoid tests requiring AWS access.
 
 ---
 
-## 8) Error Handling & Messages (Must Follow)
+## 8) Error Handling
 
 - Always include the session key in errors:
   - `service1/dev: failed to start session: ...`
 
-- On AWS process early exit, surface stderr lines:
-  - include “last 20 log lines” in error message if helpful.
+- If aws exits early, include last ~20 log lines in error output.
 
 ---
-
-## 9) Performance & UX Defaults
-
-- Ring buffer: 500 lines per session
-- Startup timeout: 15s (configurable)
-- Stop timeout: 5s (configurable)
-- Default bind: `127.0.0.1`
-- Default port range: `[5500, 5999]`
-
----
-
-## 10) Next (Post-MVP)
-
-After MVP is stable, implement:
-
-- `dbx ui` (bubbletea)
-- `dbx doctor` (checks aws presence, credentials, plugin)
-- Copy-to-clipboard support (optional)
-
----
-
-## 11) Implementation Notes (Important)
-
-- Keep the Manager as a singleton within the running process.
-- Do not attempt cross-process coordination (multiple `dbx` instances).
-- Prefer correctness and clarity over cleverness.
-- Ensure `aws` is invoked directly (no shell string); pass args slice.
-
----
-
-## 12) Manual Smoke Test Checklist
-
-1. Create config with 2+ services and envs.
-2. Run:
-   - `dbx connect service1 dev`
-   - `dbx connect service2 dev`
-   - `dbx ls`
-   - `dbx logs service1/dev --follow` (observe output)
-   - `dbx stop service1/dev`
-   - `dbx stop --all`
-
-3. Confirm DBeaver can connect using `127.0.0.1:<port>`.
-
----
-
-End of AGENTS.md
