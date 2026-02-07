@@ -14,10 +14,19 @@ const defaultRefreshInterval = 1 * time.Second
 
 type Pane string
 
+type statusLevel string
+
 const (
 	PaneTargets  Pane = "targets"
 	PaneSessions Pane = "sessions"
 	PaneLogs     Pane = "logs"
+)
+
+const (
+	statusInfo    statusLevel = "info"
+	statusSuccess statusLevel = "success"
+	statusWarn    statusLevel = "warn"
+	statusError   statusLevel = "error"
 )
 
 type Target struct {
@@ -72,6 +81,7 @@ type Model struct {
 	sessionSelected int
 	focused         Pane
 	status          string
+	statusLevel     statusLevel
 	manager         sessionManager
 	cfg             *config.Config
 	defaults        config.Defaults
@@ -94,19 +104,22 @@ func NewModel(manager sessionManager, cfg *config.Config) Model {
 	}
 
 	status := "ready"
+	level := statusInfo
 	if len(targets) == 0 {
 		status = "no configured targets found"
+		level = statusWarn
 	}
 
 	return Model{
-		targets:   targets,
-		focused:   PaneTargets,
-		status:    status,
-		manager:   manager,
-		cfg:       cfg,
-		defaults:  defaults,
-		refreshIn: defaultRefreshInterval,
-		logLines:  50,
+		targets:     targets,
+		focused:     PaneTargets,
+		status:      status,
+		statusLevel: level,
+		manager:     manager,
+		cfg:         cfg,
+		defaults:    defaults,
+		refreshIn:   defaultRefreshInterval,
+		logLines:    50,
 	}
 }
 
@@ -128,22 +141,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refreshCmd()
 	case connectResultMsg:
 		if msg.err != nil {
+			m.statusLevel = statusError
 			m.status = fmt.Sprintf("%s: connect failed: %v", msg.key, msg.err)
 		} else {
+			m.statusLevel = statusSuccess
 			m.status = fmt.Sprintf("%s: connected (%s)", msg.key, msg.endpoint)
 		}
 		return m, m.refreshNowCmd()
 	case stopResultMsg:
 		if msg.err != nil {
+			m.statusLevel = statusError
 			m.status = fmt.Sprintf("%s: stop failed: %v", msg.key, msg.err)
 		} else {
+			m.statusLevel = statusSuccess
 			m.status = fmt.Sprintf("%s: stopped", msg.key)
 		}
 		return m, m.refreshNowCmd()
 	case stopAllResultMsg:
 		if msg.err != nil {
+			m.statusLevel = statusError
 			m.status = fmt.Sprintf("stop all failed: %v", msg.err)
 		} else {
+			m.statusLevel = statusSuccess
 			m.status = "stopped all sessions"
 		}
 		return m, m.refreshNowCmd()
@@ -198,6 +217,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "tab":
 		m.cycleFocus()
+		m.statusLevel = statusInfo
+		m.status = fmt.Sprintf("focus: %s", m.focused)
 		m.syncLogs(true)
 		return m, m.ensureLogReaderCmd()
 	case "j", "down":
@@ -212,31 +233,38 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.connectSelectedCmd()
 		if cmd == nil {
 			if len(m.targets) == 0 {
+				m.statusLevel = statusWarn
 				m.status = "no target selected"
 			}
 			return m, nil
 		}
+		m.statusLevel = statusInfo
 		m.status = fmt.Sprintf("%s: connecting...", m.currentTargetKey())
 		return m, cmd
 	case "s":
 		cmd := m.stopSelectedCmd()
 		if cmd == nil {
 			if len(m.sessions) == 0 {
+				m.statusLevel = statusWarn
 				m.status = "no running session selected"
 			}
 			return m, nil
 		}
+		m.statusLevel = statusInfo
 		m.status = fmt.Sprintf("%s: stopping...", m.currentSessionKey())
 		return m, cmd
 	case "S":
 		if m.manager == nil {
+			m.statusLevel = statusError
 			m.status = "session manager unavailable"
 			return m, nil
 		}
+		m.statusLevel = statusInfo
 		m.status = "stopping all sessions..."
 		return m, m.stopAllCmd()
 	case "l":
 		m.logFollow = !m.logFollow
+		m.statusLevel = statusInfo
 		if m.logFollow {
 			m.status = "log follow enabled"
 		} else {
@@ -327,6 +355,8 @@ func (m *Model) syncLogs(force bool) {
 	if err != nil {
 		m.closeLogSubscription()
 		m.logBuffer = nil
+		m.statusLevel = statusError
+		m.status = fmt.Sprintf("%s: failed to load logs: %v", key, err)
 		return
 	}
 	m.logBuffer = lines
@@ -347,6 +377,8 @@ func (m *Model) syncLogs(force bool) {
 		m.logSubKey = ""
 		m.logSubID = 0
 		m.logSubCh = nil
+		m.statusLevel = statusError
+		m.status = fmt.Sprintf("%s: failed to follow logs: %v", key, err)
 		return
 	}
 

@@ -18,7 +18,6 @@ It’s **engine-agnostic**: dbx only provides `localhost:<port>` endpoints so yo
 
 Planned / optional:
 
-- ⏳ Interactive TUI (`dbx ui`)
 - ⏳ `dbx doctor` (dependency + AWS auth checks)
 
 ---
@@ -190,6 +189,33 @@ Stop all:
 ```bash
 dbx stop --all
 ```
+
+---
+
+## Terminal UI
+
+Launch the interactive TUI:
+
+```bash
+dbx ui
+```
+
+Current layout includes:
+
+- targets pane (configured `service/env`)
+- sessions pane (state, endpoint, uptime)
+- logs pane (selected session logs + follow state)
+- status and key-hints footer
+
+Keys:
+
+- `j/k` or arrows: move selection
+- `tab`: cycle focused pane
+- `c`: connect selected target
+- `s`: stop selected session
+- `S`: stop all sessions
+- `l`: toggle follow logs
+- `q` or `ctrl+c`: quit
 
 ---
 
