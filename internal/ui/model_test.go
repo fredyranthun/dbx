@@ -151,6 +151,13 @@ func updateModel(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {
 	return model, cmd
 }
 
+func keyMsg(v string) tea.KeyMsg {
+	if v == "tab" {
+		return tea.KeyMsg(tea.Key{Type: tea.KeyTab})
+	}
+	return tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune(v)})
+}
+
 func TestModelKeyHandlingFocusAndSelection(t *testing.T) {
 	m := NewModel(newFakeManager(), testConfig())
 
@@ -158,28 +165,28 @@ func TestModelKeyHandlingFocusAndSelection(t *testing.T) {
 		t.Fatalf("expected initial focus targets, got %s", m.focused)
 	}
 
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "tab"})
+	m, _ = updateModel(t, m, keyMsg("tab"))
 	if m.focused != PaneSessions {
 		t.Fatalf("expected sessions focus, got %s", m.focused)
 	}
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "tab"})
+	m, _ = updateModel(t, m, keyMsg("tab"))
 	if m.focused != PaneLogs {
 		t.Fatalf("expected logs focus, got %s", m.focused)
 	}
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "tab"})
+	m, _ = updateModel(t, m, keyMsg("tab"))
 	if m.focused != PaneTargets {
 		t.Fatalf("expected focus to wrap to targets, got %s", m.focused)
 	}
 
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "j"})
+	m, _ = updateModel(t, m, keyMsg("j"))
 	if m.targetSelected != 1 {
 		t.Fatalf("expected target selection=1, got %d", m.targetSelected)
 	}
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "j"})
+	m, _ = updateModel(t, m, keyMsg("j"))
 	if m.targetSelected != 1 {
 		t.Fatalf("expected target selection clamped at 1, got %d", m.targetSelected)
 	}
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "k"})
+	m, _ = updateModel(t, m, keyMsg("k"))
 	if m.targetSelected != 0 {
 		t.Fatalf("expected target selection=0, got %d", m.targetSelected)
 	}
@@ -193,7 +200,7 @@ func TestModelConnectAndStopDispatch(t *testing.T) {
 	m := NewModel(fm, testConfig())
 	m, _ = updateModel(t, m, refreshTickMsg{sessions: fm.List()})
 
-	m, cmd := updateModel(t, m, tea.KeyMsg{Value: "c"})
+	m, cmd := updateModel(t, m, keyMsg("c"))
 	if cmd == nil {
 		t.Fatal("expected connect cmd")
 	}
@@ -209,8 +216,8 @@ func TestModelConnectAndStopDispatch(t *testing.T) {
 		t.Fatalf("expected connected status, got %q", m.status)
 	}
 
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "tab"})
-	m, cmd = updateModel(t, m, tea.KeyMsg{Value: "s"})
+	m, _ = updateModel(t, m, keyMsg("tab"))
+	m, cmd = updateModel(t, m, keyMsg("s"))
 	if cmd == nil {
 		t.Fatal("expected stop cmd")
 	}
@@ -236,7 +243,7 @@ func TestModelFollowToggleAndSubscriptionLifecycle(t *testing.T) {
 		t.Fatalf("expected 2 targets, got %d", len(m.targets))
 	}
 
-	m, cmd := updateModel(t, m, tea.KeyMsg{Value: "l"})
+	m, cmd := updateModel(t, m, keyMsg("l"))
 	if !m.logFollow {
 		t.Fatal("expected follow enabled")
 	}
@@ -260,7 +267,7 @@ func TestModelFollowToggleAndSubscriptionLifecycle(t *testing.T) {
 		t.Fatal("expected chained log reader cmd")
 	}
 
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "j"})
+	m, _ = updateModel(t, m, keyMsg("j"))
 	if fm.activeSubscriptions() != 1 {
 		t.Fatalf("expected one active subscription after target switch, got %d", fm.activeSubscriptions())
 	}
@@ -271,7 +278,7 @@ func TestModelFollowToggleAndSubscriptionLifecycle(t *testing.T) {
 		t.Fatalf("expected log key %s, got %s", key2, m.logKey)
 	}
 
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "l"})
+	m, _ = updateModel(t, m, keyMsg("l"))
 	if m.logFollow {
 		t.Fatal("expected follow disabled")
 	}
@@ -284,12 +291,12 @@ func TestModelQuitClosesLogSubscription(t *testing.T) {
 	fm := newFakeManager()
 	m := NewModel(fm, testConfig())
 
-	m, _ = updateModel(t, m, tea.KeyMsg{Value: "l"})
+	m, _ = updateModel(t, m, keyMsg("l"))
 	if fm.activeSubscriptions() != 1 {
 		t.Fatalf("expected active subscription before quit, got %d", fm.activeSubscriptions())
 	}
 
-	mAny, cmd := m.handleKey(tea.KeyMsg{Value: "q"})
+	mAny, cmd := m.handleKey(keyMsg("q"))
 	m = mAny.(Model)
 	if cmd == nil {
 		t.Fatal("expected quit command")
