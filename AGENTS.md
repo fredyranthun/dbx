@@ -413,3 +413,121 @@ Avoid tests requiring AWS access.
 - If aws exits early, include last ~20 log lines in error output.
 
 ---
+
+## 9) TUI Implementation Steps (Post-MVP Only)
+
+Only start these steps after Step 11 acceptance criteria pass.
+
+### Step 12 — Add TUI command scaffold
+
+Files:
+
+- `cmd/dbx/main.go`
+- `internal/ui/model.go`
+- `internal/ui/view.go`
+
+Tasks:
+
+- Add `dbx ui` command.
+- Initialize Bubble Tea program from command handler.
+- Create placeholder model/view with startup help and quit handling (`q`, `ctrl+c`).
+
+Acceptance:
+
+- `dbx ui` launches and exits cleanly.
+- `make check` passes.
+
+---
+
+### Step 13 — Build TUI state model from app/session manager
+
+Files:
+
+- `internal/ui/model.go`
+
+Tasks:
+
+- Define UI state:
+  - configured targets (`service/env`)
+  - running sessions snapshot
+  - selected item index
+  - focused pane (`targets`, `sessions`, `logs`)
+  - last error/status line
+- Add periodic refresh (`tea.Tick`) to pull `List()` snapshots from manager.
+
+Acceptance:
+
+- TUI reflects session start/stop changes without restart.
+
+---
+
+### Step 14 — Implement layout, keybindings, and actions
+
+Files:
+
+- `internal/ui/view.go`
+- `internal/ui/model.go`
+
+Tasks:
+
+- Three-pane layout:
+  - left: all configured `service/env`
+  - middle: running sessions
+  - right/bottom: logs for selected session
+- Keybindings:
+  - `j/k` or arrows: move selection
+  - `tab`: cycle focus pane
+  - `c`: connect selected target
+  - `s`: stop selected running session
+  - `S`: stop all sessions
+  - `l`: toggle follow logs
+  - `q` or `ctrl+c`: quit
+- Show endpoint for running items (`bind:port`) and session state.
+
+Acceptance:
+
+- Connect/stop actions work from TUI and match CLI behavior.
+
+---
+
+### Step 15 — Wire logs stream integration
+
+Files:
+
+- `internal/ui/model.go`
+- `internal/session/logs.go` (only if extra helpers are required)
+
+Tasks:
+
+- On selection/focus change, subscribe to selected session logs.
+- Render buffered history first, then streamed lines when follow is enabled.
+- Cleanly unsubscribe on session switch and on quit.
+
+Acceptance:
+
+- No goroutine/channel leaks when switching sessions repeatedly.
+- Logs pane shows last lines and live updates.
+
+---
+
+### Step 16 — TUI robustness and tests
+
+Files:
+
+- `internal/ui/model_test.go`
+- `internal/ui/view_test.go` (optional snapshot-style assertions)
+
+Tasks:
+
+- Add tests for:
+  - key handling transitions
+  - focus/selection behavior
+  - connect/stop intent dispatch
+  - follow toggle and subscription lifecycle
+- Ensure graceful shutdown:
+  - `dbx ui` quit triggers default cleanup behavior unless `--no-cleanup`
+
+Acceptance:
+
+- `make check` passes.
+- TUI can be used for a full flow: connect, view logs, stop, quit.

@@ -317,6 +317,74 @@ dbx/
 - SSM output formats vary → avoid parsing; rely on local port readiness + process liveness.
 - Windows signals in WSL → use `exec.CommandContext` and ensure kill fallback.
 
+## 13) TUI v1 Implementation Plan (Post-MVP)
+
+Run this plan only after MVP acceptance criteria (AC1..AC6) are complete.
+
+### Step T1 — Command and program bootstrap
+
+- Add `dbx ui` command in Cobra.
+- Start Bubble Tea program and provide a minimal model/view.
+- Support quit keys: `q`, `ctrl+c`.
+
+Acceptance:
+
+- `dbx ui` opens and exits cleanly.
+
+### Step T2 — State model and refresh loop
+
+- Model tracks:
+  - all configured targets (`service/env`)
+  - running sessions snapshot
+  - selected row and focused pane
+  - follow-logs mode
+  - status/error line
+- Add periodic refresh tick to sync with SessionManager.
+
+Acceptance:
+
+- Session list reflects runtime changes without restarting UI.
+
+### Step T3 — Interactive controls and actions
+
+- Layout:
+  - targets pane
+  - running sessions pane
+  - logs pane
+- Keymap:
+  - navigation: arrows or `j/k`
+  - pane switch: `tab`
+  - connect: `c`
+  - stop selected: `s`
+  - stop all: `S`
+  - follow toggle: `l`
+  - quit: `q`, `ctrl+c`
+
+Acceptance:
+
+- Connect/stop from TUI delegates to same manager logic used by CLI.
+
+### Step T4 — Logs integration
+
+- Show recent buffered logs on selection.
+- Support live follow stream via session log subscriptions.
+- Unsubscribe on selection change and quit.
+
+Acceptance:
+
+- Logs update live when follow is enabled.
+- Repeated selection switches do not leak subscriptions.
+
+### Step T5 — Hardening and tests
+
+- Add focused model tests for key handling, focus changes, and action dispatch.
+- Verify cleanup behavior on quit matches CLI (`--no-cleanup` respected).
+
+Acceptance:
+
+- `make check` passes with TUI code enabled.
+- End-to-end flow works: connect, observe logs, stop, quit.
+
 ---
 
 # Code Assistant Implementation Guide (initial tasks)
@@ -363,3 +431,20 @@ dbx/
 ## Task 6 — Cleanup on exit
 
 - Root command catches SIGINT/SIGTERM and stops all sessions unless `--no-cleanup`
+
+## Task 7 — TUI scaffold (after MVP)
+
+- Add `dbx ui` command.
+- Start Bubble Tea app with base model/view and quit handling.
+
+## Task 8 — TUI state and actions
+
+- Build three-pane UI (targets, sessions, logs).
+- Wire connect/stop actions to SessionManager.
+- Add periodic refresh to reflect state changes.
+
+## Task 9 — TUI logs and cleanup
+
+- Subscribe/unsubscribe to session logs for follow behavior.
+- Ensure graceful exit and cleanup parity with CLI.
+- Add tests for key interactions and subscription lifecycle.
