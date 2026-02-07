@@ -30,21 +30,47 @@ type refreshTickMsg struct {
 	sessions []session.SessionSummary
 }
 
+type connectResultMsg struct {
+	key      session.SessionKey
+	endpoint string
+	err      error
+}
+
+type stopResultMsg struct {
+	key session.SessionKey
+	err error
+}
+
+type stopAllResultMsg struct {
+	err error
+}
+
 type Model struct {
 	width  int
 	height int
 
-	targets   []Target
-	sessions  []session.SessionSummary
-	selected  int
-	focused   Pane
-	status    string
-	manager   *session.Manager
-	refreshIn time.Duration
+	targets         []Target
+	sessions        []session.SessionSummary
+	targetSelected  int
+	sessionSelected int
+	focused         Pane
+	status          string
+	manager         *session.Manager
+	cfg             *config.Config
+	defaults        config.Defaults
+	refreshIn       time.Duration
+	logFollow       bool
+	logLines        int
+	logKey          session.SessionKey
+	logBuffer       []string
 }
 
 func NewModel(manager *session.Manager, cfg *config.Config) Model {
 	targets := configuredTargets(cfg)
+	defaults := config.Defaults{}
+	if cfg != nil {
+		defaults = cfg.EffectiveDefaults()
+	}
 
 	status := "ready"
 	if len(targets) == 0 {
@@ -56,7 +82,10 @@ func NewModel(manager *session.Manager, cfg *config.Config) Model {
 		focused:   PaneTargets,
 		status:    status,
 		manager:   manager,
+		cfg:       cfg,
+		defaults:  defaults,
 		refreshIn: defaultRefreshInterval,
+		logLines:  50,
 	}
 }
 
@@ -70,20 +99,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		}
+		return m.handleKey(msg)
 	case refreshTickMsg:
 		m.sessions = msg.sessions
-		if m.selected >= len(m.targets) && len(m.targets) > 0 {
-			m.selected = len(m.targets) - 1
-		}
-		if len(m.targets) == 0 {
-			m.selected = 0
-		}
-		m.status = fmt.Sprintf("targets=%d running=%d", len(m.targets), len(m.sessions))
+		m.clampSelections()
+		m.syncLogs(false)
 		return m, m.refreshCmd()
+	case connectResultMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("%s: connect failed: %v", msg.key, msg.err)
+		} else {
+			m.status = fmt.Sprintf("%s: connected (%s)", msg.key, msg.endpoint)
+		}
+		return m, m.refreshNowCmd()
+	case stopResultMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("%s: stop failed: %v", msg.key, msg.err)
+		} else {
+			m.status = fmt.Sprintf("%s: stopped", msg.key)
+		}
+		return m, m.refreshNowCmd()
+	case stopAllResultMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("stop all failed: %v", msg.err)
+		} else {
+			m.status = "stopped all sessions"
+		}
+		return m, m.refreshNowCmd()
 	}
 
 	return m, nil
@@ -94,15 +136,270 @@ func (m Model) View() string {
 }
 
 func (m Model) refreshCmd() tea.Cmd {
+	return m.refreshWithDelay(m.refreshIn)
+}
+
+func (m Model) refreshNowCmd() tea.Cmd {
+	return m.refreshWithDelay(0)
+}
+
+func (m Model) refreshWithDelay(delay time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		if m.refreshIn > 0 {
-			time.Sleep(m.refreshIn)
+		if delay > 0 {
+			time.Sleep(delay)
 		}
 		if m.manager == nil {
 			return refreshTickMsg{}
 		}
 		return refreshTickMsg{sessions: m.manager.List()}
 	}
+}
+
+func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "tab":
+		m.cycleFocus()
+		m.syncLogs(true)
+	case "j", "down":
+		m.moveSelection(1)
+		m.syncLogs(true)
+	case "k", "up":
+		m.moveSelection(-1)
+		m.syncLogs(true)
+	case "c":
+		cmd := m.connectSelectedCmd()
+		if cmd == nil {
+			if len(m.targets) == 0 {
+				m.status = "no target selected"
+			}
+			return m, nil
+		}
+		m.status = fmt.Sprintf("%s: connecting...", m.currentTargetKey())
+		return m, cmd
+	case "s":
+		cmd := m.stopSelectedCmd()
+		if cmd == nil {
+			if len(m.sessions) == 0 {
+				m.status = "no running session selected"
+			}
+			return m, nil
+		}
+		m.status = fmt.Sprintf("%s: stopping...", m.currentSessionKey())
+		return m, cmd
+	case "S":
+		if m.manager == nil {
+			m.status = "session manager unavailable"
+			return m, nil
+		}
+		m.status = "stopping all sessions..."
+		return m, m.stopAllCmd()
+	case "l":
+		m.logFollow = !m.logFollow
+		if m.logFollow {
+			m.status = "log follow enabled"
+		} else {
+			m.status = "log follow disabled"
+		}
+		m.syncLogs(true)
+	}
+
+	return m, nil
+}
+
+func (m *Model) cycleFocus() {
+	switch m.focused {
+	case PaneTargets:
+		m.focused = PaneSessions
+	case PaneSessions:
+		m.focused = PaneLogs
+	default:
+		m.focused = PaneTargets
+	}
+}
+
+func (m *Model) moveSelection(delta int) {
+	switch m.focused {
+	case PaneTargets:
+		if len(m.targets) == 0 {
+			m.targetSelected = 0
+			return
+		}
+		m.targetSelected += delta
+		if m.targetSelected < 0 {
+			m.targetSelected = 0
+		}
+		if m.targetSelected >= len(m.targets) {
+			m.targetSelected = len(m.targets) - 1
+		}
+	case PaneSessions:
+		if len(m.sessions) == 0 {
+			m.sessionSelected = 0
+			return
+		}
+		m.sessionSelected += delta
+		if m.sessionSelected < 0 {
+			m.sessionSelected = 0
+		}
+		if m.sessionSelected >= len(m.sessions) {
+			m.sessionSelected = len(m.sessions) - 1
+		}
+	}
+}
+
+func (m *Model) clampSelections() {
+	if len(m.targets) == 0 {
+		m.targetSelected = 0
+	} else if m.targetSelected >= len(m.targets) {
+		m.targetSelected = len(m.targets) - 1
+	}
+
+	if len(m.sessions) == 0 {
+		m.sessionSelected = 0
+	} else if m.sessionSelected >= len(m.sessions) {
+		m.sessionSelected = len(m.sessions) - 1
+	}
+}
+
+func (m *Model) syncLogs(force bool) {
+	key, ok := m.currentLogKey()
+	if !ok {
+		m.logKey = ""
+		m.logBuffer = nil
+		return
+	}
+
+	if !force && !m.logFollow && m.logKey == key {
+		return
+	}
+
+	m.logKey = key
+	if m.manager == nil {
+		m.logBuffer = nil
+		return
+	}
+	s, found := m.manager.Get(key)
+	if !found || s == nil {
+		m.logBuffer = nil
+		return
+	}
+	m.logBuffer = s.LastLogs(m.logLines)
+}
+
+func (m Model) connectSelectedCmd() tea.Cmd {
+	if m.manager == nil || len(m.targets) == 0 {
+		return nil
+	}
+
+	target := m.targets[m.targetSelected]
+	envCfg, err := findEnvConfig(m.cfg, target.Service, target.Env)
+	if err != nil {
+		return func() tea.Msg {
+			return connectResultMsg{key: target.Key, err: err}
+		}
+	}
+
+	opts := session.StartOptions{
+		Service:          target.Service,
+		Env:              target.Env,
+		Bind:             m.defaults.Bind,
+		TargetInstanceID: envCfg.TargetInstanceID,
+		RemoteHost:       envCfg.RemoteHost,
+		RemotePort:       envCfg.RemotePort,
+		Region:           m.defaults.Region,
+		Profile:          m.defaults.Profile,
+		StartupTimeout:   time.Duration(m.defaults.StartupTimeoutSeconds) * time.Second,
+	}
+	if len(m.defaults.PortRange) == 2 {
+		opts.PortMin = m.defaults.PortRange[0]
+		opts.PortMax = m.defaults.PortRange[1]
+	}
+
+	return func() tea.Msg {
+		s, err := m.manager.Start(opts)
+		if err != nil {
+			return connectResultMsg{key: target.Key, err: err}
+		}
+		return connectResultMsg{
+			key:      target.Key,
+			endpoint: fmt.Sprintf("%s:%d", s.Bind, s.LocalPort),
+		}
+	}
+}
+
+func (m Model) stopSelectedCmd() tea.Cmd {
+	if m.manager == nil || len(m.sessions) == 0 {
+		return nil
+	}
+
+	key := m.sessions[m.sessionSelected].Key
+	return func() tea.Msg {
+		return stopResultMsg{
+			key: key,
+			err: m.manager.Stop(key),
+		}
+	}
+}
+
+func (m Model) stopAllCmd() tea.Cmd {
+	return func() tea.Msg {
+		return stopAllResultMsg{err: m.manager.StopAll()}
+	}
+}
+
+func (m Model) currentTargetKey() session.SessionKey {
+	if len(m.targets) == 0 {
+		return ""
+	}
+	return m.targets[m.targetSelected].Key
+}
+
+func (m Model) currentSessionKey() session.SessionKey {
+	if len(m.sessions) == 0 {
+		return ""
+	}
+	return m.sessions[m.sessionSelected].Key
+}
+
+func (m Model) currentLogKey() (session.SessionKey, bool) {
+	switch m.focused {
+	case PaneTargets:
+		if len(m.targets) == 0 {
+			return "", false
+		}
+		return m.targets[m.targetSelected].Key, true
+	case PaneSessions:
+		if len(m.sessions) == 0 {
+			return "", false
+		}
+		return m.sessions[m.sessionSelected].Key, true
+	case PaneLogs:
+		if len(m.sessions) > 0 {
+			return m.sessions[m.sessionSelected].Key, true
+		}
+		if len(m.targets) > 0 {
+			return m.targets[m.targetSelected].Key, true
+		}
+	}
+	return "", false
+}
+
+func findEnvConfig(cfg *config.Config, serviceName, envName string) (config.EnvConfig, error) {
+	if cfg == nil {
+		return config.EnvConfig{}, fmt.Errorf("%s/%s: config not loaded", serviceName, envName)
+	}
+	for _, svc := range cfg.Services {
+		if svc.Name != serviceName {
+			continue
+		}
+		envCfg, ok := svc.Envs[envName]
+		if !ok {
+			return config.EnvConfig{}, fmt.Errorf("%s/%s: environment not found in config", serviceName, envName)
+		}
+		return envCfg, nil
+	}
+	return config.EnvConfig{}, fmt.Errorf("%s/%s: service not found in config", serviceName, envName)
 }
 
 func configuredTargets(cfg *config.Config) []Target {
