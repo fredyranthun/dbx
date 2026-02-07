@@ -1,6 +1,9 @@
 package session
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 const DefaultRingBufferLines = 500
 
@@ -65,4 +68,53 @@ func (r *RingBuffer) Last(n int) []string {
 	}
 
 	return out
+}
+
+// LastLogs returns the last n log lines for a session key.
+func (m *Manager) LastLogs(key SessionKey, n int) ([]string, error) {
+	if m == nil {
+		return nil, fmt.Errorf("manager is nil")
+	}
+
+	m.mu.RLock()
+	s, ok := m.sessions[key]
+	m.mu.RUnlock()
+	if !ok || s == nil {
+		return nil, fmt.Errorf("%s: session not found", key)
+	}
+
+	return s.LastLogs(n), nil
+}
+
+// SubscribeLogs subscribes to streaming logs for the given session key.
+func (m *Manager) SubscribeLogs(key SessionKey, buffer int) (uint64, <-chan string, error) {
+	if m == nil {
+		return 0, nil, fmt.Errorf("manager is nil")
+	}
+
+	m.mu.RLock()
+	s, ok := m.sessions[key]
+	m.mu.RUnlock()
+	if !ok || s == nil {
+		return 0, nil, fmt.Errorf("%s: session not found", key)
+	}
+
+	id, ch := s.SubscribeLogs(buffer)
+	return id, ch, nil
+}
+
+// UnsubscribeLogs detaches a prior log subscription. Missing sessions are ignored.
+func (m *Manager) UnsubscribeLogs(key SessionKey, id uint64) {
+	if m == nil || id == 0 {
+		return
+	}
+
+	m.mu.RLock()
+	s, ok := m.sessions[key]
+	m.mu.RUnlock()
+	if !ok || s == nil {
+		return
+	}
+
+	s.UnsubscribeLogs(id)
 }

@@ -45,6 +45,13 @@ type stopAllResultMsg struct {
 	err error
 }
 
+type logLineMsg struct {
+	key    session.SessionKey
+	subID  uint64
+	line   string
+	closed bool
+}
+
 type Model struct {
 	width  int
 	height int
@@ -63,6 +70,10 @@ type Model struct {
 	logLines        int
 	logKey          session.SessionKey
 	logBuffer       []string
+	logSubKey       session.SessionKey
+	logSubID        uint64
+	logSubCh        <-chan string
+	logReadActive   bool
 }
 
 func NewModel(manager *session.Manager, cfg *config.Config) Model {
@@ -126,6 +137,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "stopped all sessions"
 		}
 		return m, m.refreshNowCmd()
+	case logLineMsg:
+		if msg.subID == 0 || msg.subID != m.logSubID || msg.key != m.logSubKey {
+			return m, nil
+		}
+		if msg.closed {
+			m.logSubID = 0
+			m.logSubCh = nil
+			m.logReadActive = false
+			return m, nil
+		}
+		m.logBuffer = append(m.logBuffer, msg.line)
+		if len(m.logBuffer) > session.DefaultRingBufferLines {
+			m.logBuffer = m.logBuffer[len(m.logBuffer)-session.DefaultRingBufferLines:]
+		}
+		return m, m.logReadCmd(msg.key, msg.subID, m.logSubCh)
 	}
 
 	return m, nil
@@ -158,16 +184,20 @@ func (m Model) refreshWithDelay(delay time.Duration) tea.Cmd {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
+		m.closeLogSubscription()
 		return m, tea.Quit
 	case "tab":
 		m.cycleFocus()
 		m.syncLogs(true)
+		return m, m.ensureLogReaderCmd()
 	case "j", "down":
 		m.moveSelection(1)
 		m.syncLogs(true)
+		return m, m.ensureLogReaderCmd()
 	case "k", "up":
 		m.moveSelection(-1)
 		m.syncLogs(true)
+		return m, m.ensureLogReaderCmd()
 	case "c":
 		cmd := m.connectSelectedCmd()
 		if cmd == nil {
@@ -203,6 +233,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "log follow disabled"
 		}
 		m.syncLogs(true)
+		return m, m.ensureLogReaderCmd()
 	}
 
 	return m, nil
@@ -265,6 +296,7 @@ func (m *Model) clampSelections() {
 func (m *Model) syncLogs(force bool) {
 	key, ok := m.currentLogKey()
 	if !ok {
+		m.closeLogSubscription()
 		m.logKey = ""
 		m.logBuffer = nil
 		return
@@ -276,15 +308,41 @@ func (m *Model) syncLogs(force bool) {
 
 	m.logKey = key
 	if m.manager == nil {
+		m.closeLogSubscription()
 		m.logBuffer = nil
 		return
 	}
-	s, found := m.manager.Get(key)
-	if !found || s == nil {
+
+	lines, err := m.manager.LastLogs(key, m.logLines)
+	if err != nil {
+		m.closeLogSubscription()
 		m.logBuffer = nil
 		return
 	}
-	m.logBuffer = s.LastLogs(m.logLines)
+	m.logBuffer = lines
+
+	if !m.logFollow {
+		m.closeLogSubscription()
+		return
+	}
+
+	if m.logSubID != 0 && m.logSubKey == key && m.logSubCh != nil {
+		return
+	}
+
+	m.closeLogSubscription()
+
+	subID, ch, err := m.manager.SubscribeLogs(key, 64)
+	if err != nil {
+		m.logSubKey = ""
+		m.logSubID = 0
+		m.logSubCh = nil
+		return
+	}
+
+	m.logSubKey = key
+	m.logSubID = subID
+	m.logSubCh = ch
 }
 
 func (m Model) connectSelectedCmd() tea.Cmd {
@@ -383,6 +441,37 @@ func (m Model) currentLogKey() (session.SessionKey, bool) {
 		}
 	}
 	return "", false
+}
+
+func (m *Model) closeLogSubscription() {
+	if m.logSubID != 0 && m.manager != nil {
+		m.manager.UnsubscribeLogs(m.logSubKey, m.logSubID)
+	}
+	m.logSubKey = ""
+	m.logSubID = 0
+	m.logSubCh = nil
+	m.logReadActive = false
+}
+
+func (m Model) logReadCmd(key session.SessionKey, subID uint64, ch <-chan string) tea.Cmd {
+	if ch == nil || subID == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return logLineMsg{key: key, subID: subID, closed: true}
+		}
+		return logLineMsg{key: key, subID: subID, line: line}
+	}
+}
+
+func (m *Model) ensureLogReaderCmd() tea.Cmd {
+	if m.logSubID == 0 || m.logSubCh == nil || m.logReadActive {
+		return nil
+	}
+	m.logReadActive = true
+	return m.logReadCmd(m.logSubKey, m.logSubID, m.logSubCh)
 }
 
 func findEnvConfig(cfg *config.Config, serviceName, envName string) (config.EnvConfig, error) {
