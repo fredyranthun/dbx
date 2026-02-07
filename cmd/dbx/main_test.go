@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -114,5 +116,38 @@ func TestUICmdQuitSkipsCleanupWhenNoCleanupEnabled(t *testing.T) {
 
 	if manager.stopAllCalls != 0 {
 		t.Fatalf("expected StopAll to be skipped, got %d calls", manager.stopAllCalls)
+	}
+}
+
+func TestVersionCommandPrintsMetadata(t *testing.T) {
+	manager := &fakeAppManager{}
+	a := &app{manager: manager}
+
+	prevVersion := version
+	prevCommit := commit
+	prevDate := date
+	version = "v1.2.3"
+	commit = "abc123"
+	date = "2026-02-07T00:00:00Z"
+	defer func() {
+		version = prevVersion
+		commit = prevCommit
+		date = prevDate
+	}()
+
+	root := newRootCmd(a)
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"version"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("version command failed: %v", err)
+	}
+
+	got := out.String()
+	want := "v1.2.3 (commit=abc123 date=2026-02-07T00:00:00Z)"
+	if !strings.Contains(got, want) {
+		t.Fatalf("expected output to contain %q, got %q", want, got)
 	}
 }

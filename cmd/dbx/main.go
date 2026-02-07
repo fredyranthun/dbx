@@ -20,6 +20,12 @@ import (
 
 const defaultLogLines = 100
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 type app struct {
 	configPath string
 	verbose    bool
@@ -68,6 +74,7 @@ func newRootCmd(a *app) *cobra.Command {
 		Short:         "Manage AWS SSM port-forwarding sessions",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       buildVersionString(),
 	}
 
 	rootCmd.PersistentFlags().StringVar(&a.configPath, "config", "", "Path to config file")
@@ -79,8 +86,24 @@ func newRootCmd(a *app) *cobra.Command {
 	rootCmd.AddCommand(a.newLogsCmd())
 	rootCmd.AddCommand(a.newStopCmd())
 	rootCmd.AddCommand(a.newUICmd())
+	rootCmd.AddCommand(newVersionCmd())
 
 	return rootCmd
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprintln(cmd.OutOrStdout(), buildVersionString())
+		},
+	}
+}
+
+func buildVersionString() string {
+	return fmt.Sprintf("%s (commit=%s date=%s)", version, commit, date)
 }
 
 func (a *app) newUICmd() *cobra.Command {

@@ -57,6 +57,25 @@ go build -o dbx ./cmd/dbx
 sudo mv ./dbx /usr/local/bin/dbx
 ```
 
+### Prebuilt (WSL / Linux / macOS) - no Go required
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fredyranthun/dbx/main/scripts/install.sh | bash
+```
+
+The binary is installed to `~/.local/bin/dbx` by default.
+
+### Release a new version
+
+Tag and push a semantic version:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+GitHub Actions publishes release artifacts and `checksums.txt` automatically.
+
 ---
 
 ## Configuration
