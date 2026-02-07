@@ -84,7 +84,7 @@ func TestUICmdQuitTriggersCleanupByDefault(t *testing.T) {
 	a := &app{manager: manager, configPath: writeTestConfig(t)}
 
 	prevRunner := newTeaRunner
-	newTeaRunner = func(model tea.Model, opts ...tea.ProgramOption) teaRunner {
+	newTeaRunner = func(model tea.Model) teaRunner {
 		return fakeTeaRunner{}
 	}
 	defer func() { newTeaRunner = prevRunner }()
@@ -104,7 +104,7 @@ func TestUICmdQuitSkipsCleanupWhenNoCleanupEnabled(t *testing.T) {
 	a := &app{manager: manager, configPath: writeTestConfig(t), noCleanup: true}
 
 	prevRunner := newTeaRunner
-	newTeaRunner = func(model tea.Model, opts ...tea.ProgramOption) teaRunner {
+	newTeaRunner = func(model tea.Model) teaRunner {
 		return fakeTeaRunner{}
 	}
 	defer func() { newTeaRunner = prevRunner }()

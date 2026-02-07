@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/fredyranthun/db/internal/session"
 )
 
 func RenderView(m Model) string {
@@ -20,7 +22,7 @@ func RenderView(m Model) string {
 
 	var b strings.Builder
 	b.WriteString("dbx ui\n")
-	fmt.Fprintf(&b, "focus=%s targets=%d running=%d follow=%t\n", m.focused, len(m.targets), len(m.sessions), m.logFollow)
+	fmt.Fprintf(&b, "focus=%s targets=%d running=%d follow=%t\n", m.focused, len(m.targets), runningCount(m.sessions), m.logFollow)
 	b.WriteString("keys: j/k/up/down move | tab focus | c connect | s stop | S stop-all | l follow | q quit\n\n")
 
 	left := renderTargetsPane(m, leftWidth)
@@ -150,4 +152,14 @@ func formatDuration(d time.Duration) string {
 		return "0s"
 	}
 	return d.Truncate(time.Second).String()
+}
+
+func runningCount(sessions []session.SessionSummary) int {
+	count := 0
+	for _, s := range sessions {
+		if s.State == session.SessionStateRunning {
+			count++
+		}
+	}
+	return count
 }

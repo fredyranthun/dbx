@@ -28,3 +28,19 @@ func TestRenderViewIncludesCoreSections(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderViewRunningCountOnlyIncludesRunningState(t *testing.T) {
+	m := Model{
+		focused: PaneTargets,
+		targets: []Target{{Key: session.NewSessionKey("service1", "dev")}},
+		sessions: []session.SessionSummary{
+			{Key: session.NewSessionKey("service1", "dev"), State: session.SessionStateStopped},
+			{Key: session.NewSessionKey("service2", "dev"), State: session.SessionStateRunning},
+		},
+	}
+
+	out := RenderView(m)
+	if !strings.Contains(out, "running=1") {
+		t.Fatalf("expected running count to include only running sessions, got:\n%s", out)
+	}
+}

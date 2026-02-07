@@ -49,8 +49,8 @@ type teaRunner interface {
 	Run() (tea.Model, error)
 }
 
-var newTeaRunner = func(model tea.Model, opts ...tea.ProgramOption) teaRunner {
-	return tea.NewProgram(model, opts...)
+var newTeaRunner = func(model tea.Model) teaRunner {
+	return tea.NewProgram(model)
 }
 
 func main() {
@@ -132,37 +132,9 @@ func (a *app) newUICmd() *cobra.Command {
 }
 
 func (a *app) runUI(cfg *config.Config) error {
-	if a.verbose {
-		fmt.Fprintf(
-			os.Stderr,
-			"ui debug: stdin_tty=%t stdout_tty=%t term=%q\n",
-			isTTY(os.Stdin),
-			isTTY(os.Stdout),
-			os.Getenv("TERM"),
-		)
-		fmt.Fprintln(os.Stderr, "ui debug: using github.com/charmbracelet/bubbletea runtime")
-	}
-
 	runner := newTeaRunner(ui.NewModel(a.manager, cfg))
-	if a.verbose {
-		fmt.Fprintln(os.Stderr, "ui debug: starting bubbletea run loop")
-	}
 	_, err := runner.Run()
-	if a.verbose {
-		fmt.Fprintf(os.Stderr, "ui debug: bubbletea exited err=%v\n", err)
-	}
 	return err
-}
-
-func isTTY(f *os.File) bool {
-	if f == nil {
-		return false
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 func (a *app) installSignalCleanup(errOut io.Writer) func() {
