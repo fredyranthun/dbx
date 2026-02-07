@@ -70,8 +70,19 @@ func (a *app) newUICmd() *cobra.Command {
 		Short: "Launch terminal UI",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			program := tea.NewProgram(ui.NewModel())
-			_, err := program.Run()
+			cfg, cfgPath, err := config.LoadConfig(a.configPath)
+			if err != nil {
+				return err
+			}
+			if err := config.Validate(cfg); err != nil {
+				return err
+			}
+			if a.verbose {
+				fmt.Fprintf(cmd.ErrOrStderr(), "using config: %s\n", cfgPath)
+			}
+
+			program := tea.NewProgram(ui.NewModel(a.manager, cfg))
+			_, err = program.Run()
 			return err
 		},
 	}
