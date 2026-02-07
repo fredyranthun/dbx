@@ -106,6 +106,7 @@ services:
         target_instance_id: "i-0123456789abcdef0"
         remote_host: "mydb.xxxxxx.sa-east-1.rds.amazonaws.com"
         remote_port: 5432
+        local_port: 55432 # optional: pin local bind port for this env
       stg:
         target_instance_id: "i-0abcdef1234567890"
         remote_host: "mydb-stg.xxxxxx.sa-east-1.rds.amazonaws.com"
@@ -124,7 +125,9 @@ services:
 - `target_instance_id`: the **jumpbox EC2 instance** that has network access to the remote DB host
 - `remote_host`: **reachable from the jumpbox** (RDS endpoint, private DNS name, or IP)
 - `remote_port`: DB port (e.g., 5432 for Postgres, 3306 for MySQL)
+- `local_port` (optional): fixed local bind port for this `service/env`
 - dbx does **not** store DB credentials (use your DB client for auth)
+- Local port precedence: `--port` flag > `local_port` in config > first free port in `defaults.port_range`
 
 ---
 

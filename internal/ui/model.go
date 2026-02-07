@@ -411,6 +411,9 @@ func (m Model) connectSelectedCmd() tea.Cmd {
 		Profile:          m.defaults.Profile,
 		StartupTimeout:   time.Duration(m.defaults.StartupTimeoutSeconds) * time.Second,
 	}
+	if envCfg.LocalPort > 0 {
+		opts.LocalPort = envCfg.LocalPort
+	}
 	if len(m.defaults.PortRange) == 2 {
 		opts.PortMin = m.defaults.PortRange[0]
 		opts.PortMax = m.defaults.PortRange[1]

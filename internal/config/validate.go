@@ -50,6 +50,9 @@ func Validate(cfg *Config) error {
 			if envCfg.RemotePort < 1 || envCfg.RemotePort > 65535 {
 				return fmt.Errorf("%s.remote_port: must be between 1 and 65535", path)
 			}
+			if envCfg.LocalPort < 0 || envCfg.LocalPort > 65535 {
+				return fmt.Errorf("%s.local_port: must be between 1 and 65535", path)
+			}
 		}
 	}
 

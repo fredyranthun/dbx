@@ -27,6 +27,7 @@ type EnvConfig struct {
 	TargetInstanceID string `mapstructure:"target_instance_id" json:"target_instance_id" yaml:"target_instance_id"`
 	RemoteHost       string `mapstructure:"remote_host" json:"remote_host" yaml:"remote_host"`
 	RemotePort       int    `mapstructure:"remote_port" json:"remote_port" yaml:"remote_port"`
+	LocalPort        int    `mapstructure:"local_port" json:"local_port" yaml:"local_port"`
 }
 
 // Merged returns defaults with non-zero values from override applied.

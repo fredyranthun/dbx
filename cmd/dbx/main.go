@@ -235,6 +235,9 @@ func (a *app) newConnectCmd() *cobra.Command {
 				Profile:          profile,
 				StartupTimeout:   time.Duration(defaults.StartupTimeoutSeconds) * time.Second,
 			}
+			if envCfg.LocalPort > 0 {
+				opts.LocalPort = envCfg.LocalPort
+			}
 			if localPort > 0 {
 				opts.LocalPort = localPort
 			}

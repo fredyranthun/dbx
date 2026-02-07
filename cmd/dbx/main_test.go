@@ -13,10 +13,19 @@ import (
 
 type fakeAppManager struct {
 	stopAllCalls int
+	startCalls   []session.StartOptions
 }
 
 func (f *fakeAppManager) Start(opts session.StartOptions) (*session.Session, error) {
-	return session.NewSession(opts.Service, opts.Env), nil
+	f.startCalls = append(f.startCalls, opts)
+	s := session.NewSession(opts.Service, opts.Env)
+	s.Bind = opts.Bind
+	if opts.LocalPort == 0 {
+		s.LocalPort = 5500
+	} else {
+		s.LocalPort = opts.LocalPort
+	}
+	return s, nil
 }
 
 func (f *fakeAppManager) Stop(key session.SessionKey) error {
@@ -55,6 +64,32 @@ func (f fakeTeaRunner) Run() (tea.Model, error) {
 }
 
 func writeTestConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	content := `defaults:
+  region: sa-east-1
+  profile: corp
+  bind: "127.0.0.1"
+  port_range: [5500, 5999]
+  startup_timeout_seconds: 1
+  stop_timeout_seconds: 1
+services:
+  - name: service1
+    envs:
+      dev:
+        target_instance_id: "i-0123456789abcdef0"
+        remote_host: "db.internal"
+        remote_port: 5432
+        local_port: 55432
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+func writeTestConfigWithoutLocalPort(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
@@ -149,5 +184,68 @@ func TestVersionCommandPrintsMetadata(t *testing.T) {
 	want := "v1.2.3 (commit=abc123 date=2026-02-07T00:00:00Z)"
 	if !strings.Contains(got, want) {
 		t.Fatalf("expected output to contain %q, got %q", want, got)
+	}
+}
+
+func TestConnectUsesEnvLocalPortWhenNoFlag(t *testing.T) {
+	manager := &fakeAppManager{}
+	a := &app{manager: manager}
+	root := newRootCmd(a)
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--config", writeTestConfig(t), "connect", "service1", "dev"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("connect command failed: %v", err)
+	}
+	if len(manager.startCalls) != 1 {
+		t.Fatalf("expected one start call, got %d", len(manager.startCalls))
+	}
+	if got := manager.startCalls[0].LocalPort; got != 55432 {
+		t.Fatalf("expected local port 55432 from config, got %d", got)
+	}
+}
+
+func TestConnectPortFlagOverridesEnvLocalPort(t *testing.T) {
+	manager := &fakeAppManager{}
+	a := &app{manager: manager}
+	root := newRootCmd(a)
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--config", writeTestConfig(t), "connect", "service1", "dev", "--port", "55499"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("connect command failed: %v", err)
+	}
+	if len(manager.startCalls) != 1 {
+		t.Fatalf("expected one start call, got %d", len(manager.startCalls))
+	}
+	if got := manager.startCalls[0].LocalPort; got != 55499 {
+		t.Fatalf("expected local port 55499 from --port, got %d", got)
+	}
+}
+
+func TestConnectLeavesLocalPortUnsetWhenConfigAndFlagAreAbsent(t *testing.T) {
+	manager := &fakeAppManager{}
+	a := &app{manager: manager}
+	root := newRootCmd(a)
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--config", writeTestConfigWithoutLocalPort(t), "connect", "service1", "dev"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("connect command failed: %v", err)
+	}
+	if len(manager.startCalls) != 1 {
+		t.Fatalf("expected one start call, got %d", len(manager.startCalls))
+	}
+	if got := manager.startCalls[0].LocalPort; got != 0 {
+		t.Fatalf("expected local port unset (0), got %d", got)
 	}
 }

@@ -128,7 +128,7 @@ func testConfig() *config.Config {
 			{
 				Name: "service1",
 				Envs: map[string]config.EnvConfig{
-					"dev": {TargetInstanceID: "i-1", RemoteHost: "db1", RemotePort: 5432},
+					"dev": {TargetInstanceID: "i-1", RemoteHost: "db1", RemotePort: 5432, LocalPort: 55432},
 				},
 			},
 			{
@@ -212,6 +212,9 @@ func TestModelConnectAndStopDispatch(t *testing.T) {
 	if fm.startCalls[0].Service != "service1" || fm.startCalls[0].Env != "dev" {
 		t.Fatalf("unexpected start target: %s/%s", fm.startCalls[0].Service, fm.startCalls[0].Env)
 	}
+	if fm.startCalls[0].LocalPort != 55432 {
+		t.Fatalf("expected configured local port 55432, got %d", fm.startCalls[0].LocalPort)
+	}
 	if !strings.Contains(m.status, "connected") {
 		t.Fatalf("expected connected status, got %q", m.status)
 	}
@@ -227,6 +230,29 @@ func TestModelConnectAndStopDispatch(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "stopped") {
 		t.Fatalf("expected stopped status, got %q", m.status)
+	}
+}
+
+func TestModelConnectWithoutConfiguredLocalPortUsesRangePath(t *testing.T) {
+	fm := newFakeManager()
+	m := NewModel(fm, testConfig())
+	m.targetSelected = 1 // service2/qa has no local_port
+
+	_, cmd := updateModel(t, m, keyMsg("c"))
+	if cmd == nil {
+		t.Fatal("expected connect cmd")
+	}
+	msg := cmd()
+	_, _ = updateModel(t, m, msg)
+
+	if len(fm.startCalls) != 1 {
+		t.Fatalf("expected one start call, got %d", len(fm.startCalls))
+	}
+	if fm.startCalls[0].Service != "service2" || fm.startCalls[0].Env != "qa" {
+		t.Fatalf("unexpected start target: %s/%s", fm.startCalls[0].Service, fm.startCalls[0].Env)
+	}
+	if fm.startCalls[0].LocalPort != 0 {
+		t.Fatalf("expected local port unset (0), got %d", fm.startCalls[0].LocalPort)
 	}
 }
 

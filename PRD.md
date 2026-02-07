@@ -147,6 +147,7 @@ services:
         target_instance_id: "i-0123456789abcdef0"
         remote_host: "db.internal" # reachable from target instance
         remote_port: 5432
+        local_port: 55432 # optional fixed local port for this env
       stg:
         target_instance_id: "i-0abcdef1234567890"
         remote_host: "db-stg.internal"
@@ -157,6 +158,7 @@ services:
 
 - `remote_host` is the host the jumpbox can reach (RDS endpoint, private DNS, IP).
 - `target_instance_id` is the EC2 jumpbox instance ID.
+- `local_port` is optional; when present, dbx tries to use that local port for the env.
 - JSON config is allowed with same fields.
 
 ### 6.3 Overrides
@@ -235,6 +237,7 @@ Session fields:
 2. Determine effective region/profile/bind.
 3. Allocate local port:
    - if `--port` given use it (fail if in use)
+   - else if env `local_port` given use it (fail if in use)
    - else scan `port_range` for first free port
 
 4. Build args for AWS CLI:
