@@ -52,6 +52,16 @@ type logLineMsg struct {
 	closed bool
 }
 
+type sessionManager interface {
+	List() []session.SessionSummary
+	Start(opts session.StartOptions) (*session.Session, error)
+	Stop(key session.SessionKey) error
+	StopAll() error
+	LastLogs(key session.SessionKey, n int) ([]string, error)
+	SubscribeLogs(key session.SessionKey, buffer int) (uint64, <-chan string, error)
+	UnsubscribeLogs(key session.SessionKey, id uint64)
+}
+
 type Model struct {
 	width  int
 	height int
@@ -62,7 +72,7 @@ type Model struct {
 	sessionSelected int
 	focused         Pane
 	status          string
-	manager         *session.Manager
+	manager         sessionManager
 	cfg             *config.Config
 	defaults        config.Defaults
 	refreshIn       time.Duration
@@ -76,7 +86,7 @@ type Model struct {
 	logReadActive   bool
 }
 
-func NewModel(manager *session.Manager, cfg *config.Config) Model {
+func NewModel(manager sessionManager, cfg *config.Config) Model {
 	targets := configuredTargets(cfg)
 	defaults := config.Defaults{}
 	if cfg != nil {

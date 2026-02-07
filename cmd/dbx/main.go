@@ -25,7 +25,26 @@ type app struct {
 	verbose    bool
 	noCleanup  bool
 
-	manager *session.Manager
+	manager appSessionManager
+}
+
+type appSessionManager interface {
+	Start(opts session.StartOptions) (*session.Session, error)
+	Stop(key session.SessionKey) error
+	StopAll() error
+	List() []session.SessionSummary
+	Get(key session.SessionKey) (*session.Session, bool)
+	LastLogs(key session.SessionKey, n int) ([]string, error)
+	SubscribeLogs(key session.SessionKey, buffer int) (uint64, <-chan string, error)
+	UnsubscribeLogs(key session.SessionKey, id uint64)
+}
+
+type teaRunner interface {
+	Run() (tea.Model, error)
+}
+
+var newTeaRunner = func(model tea.Model) teaRunner {
+	return tea.NewProgram(model)
 }
 
 func main() {
@@ -81,11 +100,18 @@ func (a *app) newUICmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "using config: %s\n", cfgPath)
 			}
 
-			program := tea.NewProgram(ui.NewModel(a.manager, cfg))
-			_, err = program.Run()
-			return err
+			if err := a.runUI(cfg); err != nil {
+				return err
+			}
+			return a.cleanupSessions()
 		},
 	}
+}
+
+func (a *app) runUI(cfg *config.Config) error {
+	runner := newTeaRunner(ui.NewModel(a.manager, cfg))
+	_, err := runner.Run()
+	return err
 }
 
 func (a *app) installSignalCleanup(errOut io.Writer) func() {
@@ -103,10 +129,8 @@ func (a *app) installSignalCleanup(errOut io.Writer) func() {
 		}
 
 		once.Do(func() {
-			if !a.noCleanup {
-				if err := a.manager.StopAll(); err != nil {
-					fmt.Fprintf(errOut, "cleanup failed: %v\n", err)
-				}
+			if err := a.cleanupSessions(); err != nil {
+				fmt.Fprintf(errOut, "cleanup failed: %v\n", err)
 			}
 			os.Exit(130)
 		})
@@ -116,6 +140,16 @@ func (a *app) installSignalCleanup(errOut io.Writer) func() {
 		close(done)
 		signal.Stop(sigCh)
 	}
+}
+
+func (a *app) cleanupSessions() error {
+	if a.noCleanup || a.manager == nil {
+		return nil
+	}
+	if err := a.manager.StopAll(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *app) newConnectCmd() *cobra.Command {
