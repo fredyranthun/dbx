@@ -11,8 +11,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fredyranthun/db/internal/config"
 	"github.com/fredyranthun/db/internal/session"
+	"github.com/fredyranthun/db/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -57,8 +59,22 @@ func newRootCmd(a *app) *cobra.Command {
 	rootCmd.AddCommand(a.newLsCmd())
 	rootCmd.AddCommand(a.newLogsCmd())
 	rootCmd.AddCommand(a.newStopCmd())
+	rootCmd.AddCommand(a.newUICmd())
 
 	return rootCmd
+}
+
+func (a *app) newUICmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "ui",
+		Short: "Launch terminal UI",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			program := tea.NewProgram(ui.NewModel())
+			_, err := program.Run()
+			return err
+		},
+	}
 }
 
 func (a *app) installSignalCleanup(errOut io.Writer) func() {

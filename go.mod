@@ -5,6 +5,7 @@ go 1.25.1
 require github.com/spf13/cobra v1.10.2
 
 require (
+	github.com/charmbracelet/bubbletea v0.0.0
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -20,3 +21,5 @@ require (
 	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 )
+
+replace github.com/charmbracelet/bubbletea => ./third_party/bubbletea
