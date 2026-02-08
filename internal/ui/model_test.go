@@ -22,6 +22,14 @@ type fakeManager struct {
 	unsubbed  map[session.SessionKey][]uint64
 }
 
+type strictManager struct {
+	*fakeManager
+}
+
+func newStrictManager() *strictManager {
+	return &strictManager{fakeManager: newFakeManager()}
+}
+
 func newFakeManager() *fakeManager {
 	return &fakeManager{
 		logs:     map[session.SessionKey][]string{},
@@ -115,6 +123,29 @@ func (f *fakeManager) firstActive(key session.SessionKey) (uint64, chan string, 
 		return id, ch, true
 	}
 	return 0, nil, false
+}
+
+func (s *strictManager) LastLogs(key session.SessionKey, n int) ([]string, error) {
+	if !s.hasSession(key) {
+		return nil, fmt.Errorf("%s: session not found", key)
+	}
+	return s.fakeManager.LastLogs(key, n)
+}
+
+func (s *strictManager) SubscribeLogs(key session.SessionKey, buffer int) (uint64, <-chan string, error) {
+	if !s.hasSession(key) {
+		return 0, nil, fmt.Errorf("%s: session not found", key)
+	}
+	return s.fakeManager.SubscribeLogs(key, buffer)
+}
+
+func (s *strictManager) hasSession(key session.SessionKey) bool {
+	for _, sess := range s.listSessions {
+		if sess.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func testConfig() *config.Config {
@@ -261,10 +292,15 @@ func TestModelFollowToggleAndSubscriptionLifecycle(t *testing.T) {
 	cfg := testConfig()
 	key1 := session.NewSessionKey("service1", "dev")
 	key2 := session.NewSessionKey("service2", "qa")
+	fm.listSessions = []session.SessionSummary{
+		{Key: key1, State: session.SessionStateRunning},
+		{Key: key2, State: session.SessionStateRunning},
+	}
 	fm.logs[key1] = []string{"a1", "a2"}
 	fm.logs[key2] = []string{"b1"}
 
 	m := NewModel(fm, cfg)
+	m, _ = updateModel(t, m, refreshTickMsg{sessions: fm.List()})
 	if len(m.targets) != 2 {
 		t.Fatalf("expected 2 targets, got %d", len(m.targets))
 	}
@@ -315,7 +351,12 @@ func TestModelFollowToggleAndSubscriptionLifecycle(t *testing.T) {
 
 func TestModelQuitClosesLogSubscription(t *testing.T) {
 	fm := newFakeManager()
+	key := session.NewSessionKey("service1", "dev")
+	fm.listSessions = []session.SessionSummary{
+		{Key: key, State: session.SessionStateRunning},
+	}
 	m := NewModel(fm, testConfig())
+	m, _ = updateModel(t, m, refreshTickMsg{sessions: fm.List()})
 
 	m, _ = updateModel(t, m, keyMsg("l"))
 	if fm.activeSubscriptions() != 1 {
@@ -335,5 +376,39 @@ func TestModelQuitClosesLogSubscription(t *testing.T) {
 	}
 	if fmt.Sprintf("%p", cmd) != fmt.Sprintf("%p", tea.Quit) {
 		t.Fatal("expected tea.Quit command")
+	}
+}
+
+func TestModelSyncLogsNoSessionDoesNotSetError(t *testing.T) {
+	sm := newStrictManager()
+	m := NewModel(sm, testConfig())
+
+	m, _ = updateModel(t, m, refreshTickMsg{sessions: sm.List()})
+
+	if m.statusLevel == statusError {
+		t.Fatalf("expected non-error status level, got %s (%q)", m.statusLevel, m.status)
+	}
+	if strings.Contains(m.status, "failed to load logs") || strings.Contains(m.status, "session not found") {
+		t.Fatalf("expected no missing-session log error status, got %q", m.status)
+	}
+	if len(m.logBuffer) != 0 {
+		t.Fatalf("expected empty log buffer, got %d lines", len(m.logBuffer))
+	}
+}
+
+func TestModelFollowNoSessionDoesNotSetErrorOrSubscribe(t *testing.T) {
+	sm := newStrictManager()
+	m := NewModel(sm, testConfig())
+
+	m, _ = updateModel(t, m, keyMsg("l"))
+
+	if m.statusLevel == statusError {
+		t.Fatalf("expected non-error status level, got %s (%q)", m.statusLevel, m.status)
+	}
+	if strings.Contains(m.status, "failed to follow logs") || strings.Contains(m.status, "session not found") {
+		t.Fatalf("expected no missing-session follow error status, got %q", m.status)
+	}
+	if sm.activeSubscriptions() != 0 {
+		t.Fatalf("expected no subscriptions without active session, got %d", sm.activeSubscriptions())
 	}
 }

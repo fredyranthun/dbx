@@ -350,6 +350,11 @@ func (m *Model) syncLogs(force bool) {
 		m.logBuffer = nil
 		return
 	}
+	if !m.hasSessionForKey(key) {
+		m.closeLogSubscription()
+		m.logBuffer = nil
+		return
+	}
 
 	lines, err := m.manager.LastLogs(key, m.logLines)
 	if err != nil {
@@ -385,6 +390,15 @@ func (m *Model) syncLogs(force bool) {
 	m.logSubKey = key
 	m.logSubID = subID
 	m.logSubCh = ch
+}
+
+func (m *Model) hasSessionForKey(key session.SessionKey) bool {
+	for _, s := range m.sessions {
+		if s.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) connectSelectedCmd() tea.Cmd {
