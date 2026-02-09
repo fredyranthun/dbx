@@ -95,11 +95,16 @@ func renderBody(m Model, width, height int) string {
 
 func renderTargetsPane(m Model, width int) string {
 	title := paneTitle("targets", m.focused == PaneTargets, fmt.Sprintf("%d", len(m.targets)))
-	lines := make([]string, 0, len(m.targets)+1)
+	lines := make([]string, 0, len(m.targets)+3)
 	if len(m.targets) == 0 {
 		lines = append(lines, mutedStyle.Render("No configured targets"))
 	} else {
-		for i, t := range m.targets {
+		start, end := m.targetViewportBounds()
+		if start > 0 {
+			lines = append(lines, mutedStyle.Render(fmt.Sprintf("↑ %d more", start)))
+		}
+		for i := start; i < end; i++ {
+			t := m.targets[i]
 			line := fmt.Sprintf("%s", t.Key)
 			if i == m.targetSelected {
 				line = selectionStyle.Render("› " + line)
@@ -107,6 +112,9 @@ func renderTargetsPane(m Model, width int) string {
 				line = "  " + line
 			}
 			lines = append(lines, line)
+		}
+		if end < len(m.targets) {
+			lines = append(lines, mutedStyle.Render(fmt.Sprintf("↓ %d more", len(m.targets)-end)))
 		}
 	}
 	return renderPane(title, m.focused == PaneTargets, width, lines)

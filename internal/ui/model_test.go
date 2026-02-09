@@ -172,6 +172,31 @@ func testConfig() *config.Config {
 	}
 }
 
+func manyTargetsConfig(total int) *config.Config {
+	envs := make(map[string]config.EnvConfig, total)
+	for i := 0; i < total; i++ {
+		envs[fmt.Sprintf("env%02d", i)] = config.EnvConfig{
+			TargetInstanceID: fmt.Sprintf("i-%02d", i),
+			RemoteHost:       fmt.Sprintf("db-%02d.internal", i),
+			RemotePort:       5432,
+		}
+	}
+
+	return &config.Config{
+		Defaults: config.Defaults{
+			Bind:                  "127.0.0.1",
+			PortRange:             []int{5500, 5599},
+			StartupTimeoutSeconds: 5,
+		},
+		Services: []config.Service{
+			{
+				Name: "service",
+				Envs: envs,
+			},
+		},
+	}
+}
+
 func updateModel(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {
 	t.Helper()
 	updated, cmd := m.Update(msg)
@@ -220,6 +245,51 @@ func TestModelKeyHandlingFocusAndSelection(t *testing.T) {
 	m, _ = updateModel(t, m, keyMsg("k"))
 	if m.targetSelected != 0 {
 		t.Fatalf("expected target selection=0, got %d", m.targetSelected)
+	}
+}
+
+func TestModelTargetViewportScrollsWithSelection(t *testing.T) {
+	m := NewModel(newFakeManager(), manyTargetsConfig(15))
+	m.width = 120
+	m.height = 20
+	m.syncTargetViewport()
+
+	if m.targetVisibleCapacity() != 9 {
+		t.Fatalf("expected visible capacity 9, got %d", m.targetVisibleCapacity())
+	}
+	if m.targetViewportStart != 0 {
+		t.Fatalf("expected initial viewport start 0, got %d", m.targetViewportStart)
+	}
+
+	for i := 0; i < 9; i++ {
+		m, _ = updateModel(t, m, keyMsg("j"))
+	}
+
+	if m.targetSelected != 9 {
+		t.Fatalf("expected selected target 9, got %d", m.targetSelected)
+	}
+	if m.targetViewportStart != 1 {
+		t.Fatalf("expected viewport start 1 after scrolling down, got %d", m.targetViewportStart)
+	}
+
+	for i := 0; i < 20; i++ {
+		m, _ = updateModel(t, m, keyMsg("j"))
+	}
+	if m.targetSelected != 14 {
+		t.Fatalf("expected selection clamped at last target (14), got %d", m.targetSelected)
+	}
+	if m.targetViewportStart != 6 {
+		t.Fatalf("expected viewport start clamped at 6, got %d", m.targetViewportStart)
+	}
+
+	for i := 0; i < 20; i++ {
+		m, _ = updateModel(t, m, keyMsg("k"))
+	}
+	if m.targetSelected != 0 {
+		t.Fatalf("expected selection clamped at first target (0), got %d", m.targetSelected)
+	}
+	if m.targetViewportStart != 0 {
+		t.Fatalf("expected viewport start reset to 0, got %d", m.targetViewportStart)
 	}
 }
 

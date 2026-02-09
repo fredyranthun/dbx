@@ -1,11 +1,26 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/fredyranthun/db/internal/session"
 )
+
+func makeTargets(total int) []Target {
+	targets := make([]Target, 0, total)
+	for i := 0; i < total; i++ {
+		service := "service"
+		env := fmt.Sprintf("env%02d", i)
+		targets = append(targets, Target{
+			Service: service,
+			Env:     env,
+			Key:     session.NewSessionKey(service, env),
+		})
+	}
+	return targets
+}
 
 func TestRenderViewIncludesCoreSections(t *testing.T) {
 	m := Model{
@@ -65,5 +80,28 @@ func TestRenderViewNarrowLayoutStillShowsAllPanes(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q in narrow layout\n%s", want, out)
 		}
+	}
+}
+
+func TestRenderViewTargetsViewportShowsIndicators(t *testing.T) {
+	m := Model{
+		width:          120,
+		height:         20,
+		focused:        PaneTargets,
+		targets:        makeTargets(15),
+		targetSelected: 10,
+		status:         "ok",
+	}
+	m.syncTargetViewport()
+
+	out := RenderView(m)
+
+	for _, want := range []string{"↑ 2 more", "↓ 4 more", "service/env10"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "service/env00") {
+		t.Fatalf("expected output not to contain offscreen target service/env00\n%s", out)
 	}
 }

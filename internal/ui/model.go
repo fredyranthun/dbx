@@ -75,25 +75,26 @@ type Model struct {
 	width  int
 	height int
 
-	targets         []Target
-	sessions        []session.SessionSummary
-	targetSelected  int
-	sessionSelected int
-	focused         Pane
-	status          string
-	statusLevel     statusLevel
-	manager         sessionManager
-	cfg             *config.Config
-	defaults        config.Defaults
-	refreshIn       time.Duration
-	logFollow       bool
-	logLines        int
-	logKey          session.SessionKey
-	logBuffer       []string
-	logSubKey       session.SessionKey
-	logSubID        uint64
-	logSubCh        <-chan string
-	logReadActive   bool
+	targets             []Target
+	sessions            []session.SessionSummary
+	targetSelected      int
+	targetViewportStart int
+	sessionSelected     int
+	focused             Pane
+	status              string
+	statusLevel         statusLevel
+	manager             sessionManager
+	cfg                 *config.Config
+	defaults            config.Defaults
+	refreshIn           time.Duration
+	logFollow           bool
+	logLines            int
+	logKey              session.SessionKey
+	logBuffer           []string
+	logSubKey           session.SessionKey
+	logSubID            uint64
+	logSubCh            <-chan string
+	logReadActive       bool
 }
 
 func NewModel(manager sessionManager, cfg *config.Config) Model {
@@ -132,11 +133,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.syncTargetViewport()
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	case refreshTickMsg:
 		m.sessions = msg.sessions
 		m.clampSelections()
+		m.syncTargetViewport()
 		m.syncLogs(false)
 		return m, m.refreshCmd()
 	case connectResultMsg:
@@ -302,6 +305,7 @@ func (m *Model) moveSelection(delta int) {
 		if m.targetSelected >= len(m.targets) {
 			m.targetSelected = len(m.targets) - 1
 		}
+		m.syncTargetViewport()
 	case PaneSessions:
 		if len(m.sessions) == 0 {
 			m.sessionSelected = 0
@@ -323,12 +327,98 @@ func (m *Model) clampSelections() {
 	} else if m.targetSelected >= len(m.targets) {
 		m.targetSelected = len(m.targets) - 1
 	}
+	m.syncTargetViewport()
 
 	if len(m.sessions) == 0 {
 		m.sessionSelected = 0
 	} else if m.sessionSelected >= len(m.sessions) {
 		m.sessionSelected = len(m.sessions) - 1
 	}
+}
+
+func (m *Model) syncTargetViewport() {
+	if len(m.targets) == 0 {
+		m.targetViewportStart = 0
+		return
+	}
+
+	visible := m.targetVisibleCapacity()
+	if visible >= len(m.targets) {
+		m.targetViewportStart = 0
+		return
+	}
+
+	maxStart := len(m.targets) - visible
+	if m.targetViewportStart < 0 {
+		m.targetViewportStart = 0
+	}
+	if m.targetViewportStart > maxStart {
+		m.targetViewportStart = maxStart
+	}
+
+	if m.targetSelected < m.targetViewportStart {
+		m.targetViewportStart = m.targetSelected
+	}
+	if m.targetSelected >= m.targetViewportStart+visible {
+		m.targetViewportStart = m.targetSelected - visible + 1
+	}
+
+	if m.targetViewportStart < 0 {
+		m.targetViewportStart = 0
+	}
+	if m.targetViewportStart > maxStart {
+		m.targetViewportStart = maxStart
+	}
+}
+
+func (m Model) targetVisibleCapacity() int {
+	height := m.height
+	if height <= 0 {
+		height = 32
+	}
+
+	width := m.width
+	if width <= 0 {
+		width = defaultWidth
+	}
+
+	if width < narrowLayoutBreakpoint {
+		paneHeight := max(6, height/3)
+		return max(1, paneHeight-3)
+	}
+
+	logsHeight := max(8, height-17)
+	topHeight := height - logsHeight
+	if topHeight < 6 {
+		topHeight = 6
+	}
+	return max(1, topHeight-3)
+}
+
+func (m Model) targetViewportBounds() (int, int) {
+	if len(m.targets) == 0 {
+		return 0, 0
+	}
+
+	visible := m.targetVisibleCapacity()
+	if visible >= len(m.targets) {
+		return 0, len(m.targets)
+	}
+
+	start := m.targetViewportStart
+	if start < 0 {
+		start = 0
+	}
+	maxStart := len(m.targets) - visible
+	if start > maxStart {
+		start = maxStart
+	}
+
+	end := start + visible
+	if end > len(m.targets) {
+		end = len(m.targets)
+	}
+	return start, end
 }
 
 func (m *Model) syncLogs(force bool) {
