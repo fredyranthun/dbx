@@ -22,6 +22,12 @@ const (
 	logTailLinesOnError   = 20
 )
 
+var (
+	errSessionNotFound = errors.New("session not found")
+	execCommandContext = exec.CommandContext
+	waitForPortFn      = WaitForPort
+)
+
 // StartOptions contains the parameters required to start one session.
 type StartOptions struct {
 	Service          string
@@ -95,9 +101,13 @@ func (m *Manager) Start(opts StartOptions) (*Session, error) {
 	key := NewSessionKey(opts.Service, opts.Env)
 
 	m.mu.Lock()
-	if _, exists := m.sessions[key]; exists {
-		m.mu.Unlock()
-		return nil, fmt.Errorf("%s: session already exists", key)
+	if existing, exists := m.sessions[key]; exists {
+		if existing == nil || existing.State == SessionStateStopped {
+			delete(m.sessions, key)
+		} else {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("%s: session already exists", key)
+		}
 	}
 
 	port, err := m.selectPortLocked(opts)
@@ -128,25 +138,31 @@ func (m *Manager) Start(opts StartOptions) (*Session, error) {
 		opts.Region,
 		opts.Profile,
 	)
-	cmd := exec.CommandContext(ctx, "aws", args...)
+	cmd := execCommandContext(ctx, "aws", args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
 		m.failStart(key, fmt.Errorf("failed to capture stdout: %w", err))
-		return nil, m.startErrorWithLogs(key, err)
+		startErr := m.startErrorWithLogs(key, err)
+		m.removeSession(key)
+		return nil, startErr
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		cancel()
 		m.failStart(key, fmt.Errorf("failed to capture stderr: %w", err))
-		return nil, m.startErrorWithLogs(key, err)
+		startErr := m.startErrorWithLogs(key, err)
+		m.removeSession(key)
+		return nil, startErr
 	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
 		m.failStart(key, fmt.Errorf("failed to start aws command: %w", err))
-		return nil, m.startErrorWithLogs(key, err)
+		startErr := m.startErrorWithLogs(key, err)
+		m.removeSession(key)
+		return nil, startErr
 	}
 
 	m.mu.Lock()
@@ -162,11 +178,12 @@ func (m *Manager) Start(opts StartOptions) (*Session, error) {
 	go m.waitProcess(key, cmd)
 
 	if err := m.waitUntilReady(key, opts.Bind, port, opts.StartupTimeout); err != nil {
+		startErr := m.startErrorWithLogs(key, err)
 		stopErr := m.Stop(key)
 		if stopErr != nil {
-			err = errors.Join(err, stopErr)
+			return nil, fmt.Errorf("%v\ncleanup error: %w", startErr, stopErr)
 		}
-		return nil, m.startErrorWithLogs(key, err)
+		return nil, startErr
 	}
 
 	m.mu.Lock()
@@ -189,14 +206,16 @@ func (m *Manager) Stop(key SessionKey) error {
 	s, ok := m.sessions[key]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("%s: session not found", key)
+		return fmt.Errorf("%s: %w", key, errSessionNotFound)
 	}
 	if s.State == SessionStateStopped {
+		delete(m.sessions, key)
 		m.mu.Unlock()
 		return nil
 	}
 	if s.State == SessionStateError {
-		s.State = SessionStateStopped
+		s.CloseLogSubscribers()
+		delete(m.sessions, key)
 		m.mu.Unlock()
 		return nil
 	}
@@ -208,10 +227,7 @@ func (m *Manager) Stop(key SessionKey) error {
 
 	if cmd == nil || cmd.Process == nil {
 		m.mu.Lock()
-		if current, exists := m.sessions[key]; exists {
-			current.State = SessionStateStopped
-			current.CloseLogSubscribers()
-		}
+		m.removeSessionLocked(key)
 		m.mu.Unlock()
 		return nil
 	}
@@ -251,6 +267,9 @@ func (m *Manager) StopAll() error {
 	var errs []error
 	for _, key := range keys {
 		if err := m.Stop(key); err != nil {
+			if errors.Is(err, errSessionNotFound) {
+				continue
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -377,7 +396,7 @@ func (m *Manager) waitUntilReady(key SessionKey, bind string, port int, timeout 
 		if remaining < interval {
 			interval = remaining
 		}
-		if err := WaitForPort(bind, port, interval); err == nil {
+		if err := waitForPortFn(bind, port, interval); err == nil {
 			return nil
 		}
 
@@ -434,14 +453,15 @@ func (m *Manager) waitProcess(key SessionKey, cmd *exec.Cmd) {
 		return
 	}
 	if s.State == SessionStateStopping {
-		s.State = SessionStateStopped
+		m.removeSessionLocked(key)
+		m.mu.Unlock()
+		return
 	} else if err != nil {
-		s.State = SessionStateError
-		s.LastError = fmt.Sprintf("process exited: %v", err)
+		s.AppendLog(fmt.Sprintf("process exited: %v", err))
 	} else {
-		s.State = SessionStateStopped
+		s.AppendLog("process exited cleanly")
 	}
-	s.CloseLogSubscribers()
+	m.removeSessionLocked(key)
 	m.mu.Unlock()
 }
 
@@ -503,4 +523,21 @@ func (m *Manager) copySessionLocked(key SessionKey) *Session {
 	}
 	cp := *s
 	return &cp
+}
+
+func (m *Manager) removeSession(key SessionKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removeSessionLocked(key)
+}
+
+func (m *Manager) removeSessionLocked(key SessionKey) {
+	s, ok := m.sessions[key]
+	if !ok || s == nil {
+		delete(m.sessions, key)
+		return
+	}
+	s.State = SessionStateStopped
+	s.CloseLogSubscribers()
+	delete(m.sessions, key)
 }
