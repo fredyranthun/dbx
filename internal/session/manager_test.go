@@ -2,7 +2,10 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os/exec"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -12,13 +15,18 @@ func withManagerTestSeams(t *testing.T, cmdFn func(context.Context, string, ...s
 
 	prevExec := execCommandContext
 	prevWait := waitForPortFn
+	prevPort := portAvailableFn
 	execCommandContext = cmdFn
 	waitForPortFn = func(bind string, port int, timeout time.Duration) error {
+		return nil
+	}
+	portAvailableFn = func(bind string, port int) error {
 		return nil
 	}
 	t.Cleanup(func() {
 		execCommandContext = prevExec
 		waitForPortFn = prevWait
+		portAvailableFn = prevPort
 	})
 }
 
@@ -103,5 +111,69 @@ func TestManagerStopAllRemovesAllSessions(t *testing.T) {
 
 	if _, err := m.Start(startOpts("service1", "dev", 5513)); err != nil {
 		t.Fatalf("re-start after stop-all failed: %v", err)
+	}
+}
+
+func TestManagerStopWaitsForPortRelease(t *testing.T) {
+	withManagerTestSeams(t, fakeLongRunningCommand)
+
+	var calls atomic.Int32
+	var stopping atomic.Bool
+	portAvailableFn = func(bind string, port int) error {
+		if !stopping.Load() {
+			return nil
+		}
+		if bind == "127.0.0.1" && port == 5515 && calls.Add(1) <= 3 {
+			return errors.New("address in use")
+		}
+		return nil
+	}
+
+	m := NewManager()
+	m.defaultStopWait = 2 * time.Second
+	key := NewSessionKey("service3", "dev")
+
+	if _, err := m.Start(startOpts("service3", "dev", 5515)); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	stopping.Store(true)
+	if err := m.Stop(key); err != nil {
+		t.Fatalf("stop failed waiting for release: %v", err)
+	}
+	if got := calls.Load(); got < 4 {
+		t.Fatalf("expected port checks during stop, got %d", got)
+	}
+}
+
+func TestManagerStopFailsWhenPortStaysBusy(t *testing.T) {
+	withManagerTestSeams(t, fakeLongRunningCommand)
+
+	var stopping atomic.Bool
+	portAvailableFn = func(bind string, port int) error {
+		if !stopping.Load() {
+			return nil
+		}
+		if bind == "127.0.0.1" && port == 5516 {
+			return errors.New("address in use")
+		}
+		return nil
+	}
+
+	m := NewManager()
+	m.defaultStopWait = 300 * time.Millisecond
+	key := NewSessionKey("service4", "dev")
+
+	if _, err := m.Start(startOpts("service4", "dev", 5516)); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	stopping.Store(true)
+
+	err := m.Stop(key)
+	if err == nil {
+		t.Fatal("expected stop error when port remains busy")
+	}
+	want := fmt.Sprintf("%s: process stopped but local port 127.0.0.1:5516 is still in use", key)
+	if err.Error() != want {
+		t.Fatalf("unexpected stop error, want %q got %q", want, err.Error())
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -26,6 +27,7 @@ var (
 	errSessionNotFound = errors.New("session not found")
 	execCommandContext = exec.CommandContext
 	waitForPortFn      = WaitForPort
+	portAvailableFn    = ValidatePortAvailable
 )
 
 // StartOptions contains the parameters required to start one session.
@@ -139,6 +141,7 @@ func (m *Manager) Start(opts StartOptions) (*Session, error) {
 		opts.Profile,
 	)
 	cmd := execCommandContext(ctx, "aws", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -232,20 +235,26 @@ func (m *Manager) Stop(key SessionKey) error {
 		return nil
 	}
 
-	if err := cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := m.signalSession(s, syscall.SIGINT); err != nil {
 		return fmt.Errorf("%s: failed to interrupt process: %w", key, err)
 	}
 
 	if m.waitForState(key, SessionStateStopped, m.defaultStopWait) {
+		if err := m.waitUntilPortReleased(s.Bind, s.LocalPort, m.defaultStopWait); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
 		return nil
 	}
 
-	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := m.signalSession(s, syscall.SIGKILL); err != nil {
 		return fmt.Errorf("%s: failed to kill process: %w", key, err)
 	}
 
 	if !m.waitForState(key, SessionStateStopped, 2*time.Second) {
 		return fmt.Errorf("%s: session did not stop within timeout", key)
+	}
+	if err := m.waitUntilPortReleased(s.Bind, s.LocalPort, 2*time.Second); err != nil {
+		return fmt.Errorf("%s: %w", key, err)
 	}
 
 	return nil
@@ -342,7 +351,7 @@ func (m *Manager) selectPortLocked(opts StartOptions) (int, error) {
 		if m.portReservedLocked(opts.Bind, opts.LocalPort) {
 			return 0, fmt.Errorf("requested port %d already used by another session", opts.LocalPort)
 		}
-		if err := ValidatePortAvailable(opts.Bind, opts.LocalPort); err != nil {
+		if err := portAvailableFn(opts.Bind, opts.LocalPort); err != nil {
 			return 0, err
 		}
 		return opts.LocalPort, nil
@@ -364,7 +373,7 @@ func (m *Manager) selectPortLocked(opts StartOptions) (int, error) {
 		if m.portReservedLocked(opts.Bind, port) {
 			continue
 		}
-		if err := ValidatePortAvailable(opts.Bind, port); err == nil {
+		if err := portAvailableFn(opts.Bind, port); err == nil {
 			return port, nil
 		}
 	}
@@ -463,6 +472,50 @@ func (m *Manager) waitProcess(key SessionKey, cmd *exec.Cmd) {
 	}
 	m.removeSessionLocked(key)
 	m.mu.Unlock()
+}
+
+func (m *Manager) waitUntilPortReleased(bind string, port int, timeout time.Duration) error {
+	if port <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := portAvailableFn(bind, port); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("process stopped but local port %s:%d is still in use", bind, port)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (m *Manager) signalSession(s *Session, sig syscall.Signal) error {
+	if s == nil || s.cmd == nil || s.cmd.Process == nil {
+		return nil
+	}
+
+	pid := s.cmd.Process.Pid
+	if pid <= 0 {
+		return nil
+	}
+
+	// Kill process group first to avoid leaving session-manager-plugin children behind.
+	if err := syscall.Kill(-pid, sig); err == nil || errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+
+	if sig == syscall.SIGINT {
+		if err := s.cmd.Process.Signal(os.Interrupt); err == nil || errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+	} else {
+		if err := s.cmd.Process.Kill(); err == nil || errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to signal session pid=%d with %s", pid, sig.String())
 }
 
 func (m *Manager) pipeLogs(key SessionKey, src io.ReadCloser) {
