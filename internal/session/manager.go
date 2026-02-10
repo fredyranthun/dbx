@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -141,7 +139,7 @@ func (m *Manager) Start(opts StartOptions) (*Session, error) {
 		opts.Profile,
 	)
 	cmd := execCommandContext(ctx, "aws", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureCommandForPlatform(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -235,7 +233,7 @@ func (m *Manager) Stop(key SessionKey) error {
 		return nil
 	}
 
-	if err := m.signalSession(s, syscall.SIGINT); err != nil {
+	if err := interruptSessionProcess(cmd); err != nil {
 		return fmt.Errorf("%s: failed to interrupt process: %w", key, err)
 	}
 
@@ -246,7 +244,7 @@ func (m *Manager) Stop(key SessionKey) error {
 		return nil
 	}
 
-	if err := m.signalSession(s, syscall.SIGKILL); err != nil {
+	if err := killSessionProcess(cmd); err != nil {
 		return fmt.Errorf("%s: failed to kill process: %w", key, err)
 	}
 
@@ -488,34 +486,6 @@ func (m *Manager) waitUntilPortReleased(bind string, port int, timeout time.Dura
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-}
-
-func (m *Manager) signalSession(s *Session, sig syscall.Signal) error {
-	if s == nil || s.cmd == nil || s.cmd.Process == nil {
-		return nil
-	}
-
-	pid := s.cmd.Process.Pid
-	if pid <= 0 {
-		return nil
-	}
-
-	// Kill process group first to avoid leaving session-manager-plugin children behind.
-	if err := syscall.Kill(-pid, sig); err == nil || errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-
-	if sig == syscall.SIGINT {
-		if err := s.cmd.Process.Signal(os.Interrupt); err == nil || errors.Is(err, os.ErrProcessDone) {
-			return nil
-		}
-	} else {
-		if err := s.cmd.Process.Kill(); err == nil || errors.Is(err, os.ErrProcessDone) {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("failed to signal session pid=%d with %s", pid, sig.String())
 }
 
 func (m *Manager) pipeLogs(key SessionKey, src io.ReadCloser) {
